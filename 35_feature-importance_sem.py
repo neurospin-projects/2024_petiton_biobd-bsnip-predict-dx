@@ -8,9 +8,12 @@ import statsmodels.api as sm
 import statsmodels.formula.api as smf
 import scipy.stats
 
+# %% Path
+
 WD = "/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx"
 
 # %% Read data
+
 participants = pd.read_csv(os.path.join(WD, "data/processed", "participantsBD.csv"))
 participants = participants[["participant_id", "sex", "age", "diagnosis", "site"]]
 participants.diagnosis.replace({'bipolar disorder':'BD', 'control':'HC', 'psychotic bipolar disorder':'BD'}, inplace=True)
@@ -46,6 +49,7 @@ stats.to_excel(os.path.join(WD, "models/statistics_univ", "statsuniv_roisBD.xlsx
 
 
 # %% Select variables from shap values
+
 shap = pd.read_excel(os.path.join(WD, "models/ShapValues/SHAP_summary.xlsx"))
 shap = shap[['fold', 'ROI', 'mean_abs_shap']]
 

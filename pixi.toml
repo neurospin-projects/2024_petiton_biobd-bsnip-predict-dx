@@ -1,4 +1,5 @@
 [project]
+authors = ["EDOUARD DUCHESNAY <edouard.duchesnay@gmail.com>"]
 channels = ["conda-forge"]
 description = "Add a short description here"
 name = "2024_petiton_biobd-bsnip-predict-dx"
@@ -8,12 +9,15 @@ version = "0.1.0"
 [tasks]
 
 [dependencies]
-python = "3.8.*"
-scikit-learn = ">=1.3.2,<2"
-pandas = ">=2.0.3,<3"
+python = ">=3.12.8,<3.13"
+scikit-learn = ">=1.6.1,<2"
+pandas = ">=2.2.3,<3"
 ipykernel = ">=6.29.5,<7"
-pip = ">=24.3.1,<25"
+pip = ">=25.0,<26"
 openpyxl = ">=3.1.5,<4"
+shap = ">=0.46.0,<0.47"
+matplotlib = ">=3.10.0,<4"
+seaborn = ">=0.13.2,<0.14"
 
 [pypi-dependencies]
 semopy = { version = "*"}

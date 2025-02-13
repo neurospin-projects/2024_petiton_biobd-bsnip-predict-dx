@@ -1,6 +1,7 @@
 # %% Imports
 
 import numpy as np
+import scipy
 import pandas as pd
 import pickle
 import os.path
@@ -11,11 +12,6 @@ import seaborn as sns
 plt.style.use('seaborn-v0_8-whitegrid')
 colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
-# Statmodels
-import statsmodels.api as sm
-import statsmodels.formula.api as smf
-import scipy.stats
-from statsmodels.stats.multitest import multipletests
 
 # ML
 from sklearn.svm import SVC
@@ -42,85 +38,50 @@ atlas = pd.read_csv(os.path.join(WD, "data/atlases/lobes_Neuromorphometrics.csv"
 
 shap_df = pd.read_excel(os.path.join(WD, "models/ShapValues/shap_computed_from_all_Xtrain/SHAP_summary.xlsx"))
 
+# %% Randomize SHAP values
+# ========================
+#
+# Output:  "models/ShapValues/SHAP_randomized_*.csv"
 
-# %% Univariate statistics
+if False:
+     
+    X = data.loc[:, 'l3thVen_GM_Vol':]
+    y = data.diagnosis
 
-# Replace +- not alowed in statsmodel formulae
-data.columns = data.columns.str.replace('-', '_MINUS_') 
-data.columns = data.columns.str.replace('+', '_PLUS_') 
+    shap_values_list = list()
+    for i in range(1, 10): #range(5):
+        y = np.random.permutation(y)
 
-stats = list()
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y)
+        ss = StandardScaler()
+        X_train = pd.DataFrame(ss.fit_transform(X_train), columns=X.columns)
+        X_test = pd.DataFrame(ss.transform(X_test), columns=X.columns)
 
-for var_ in data.loc[:, 'TIV':].columns:
-    print(var_)
-    lm_ = smf.ols('%s ~ diagnosis + sex + age + site' % var_, data).fit()
-    #print(lm_.model.data.param_names)
-    aov_ = sm.stats.anova_lm(lm_, typ=2)
+        #svc_pipeline = Pipeline([
+        #    ('scaler', StandardScaler()), 
+        #    ('svc', SVC(C=1.0, kernel='rbf', probability=True, class_weight='balanced'))
+        #])
+        svc_pipeline = SVC(C=1.0, kernel='rbf', probability=True, class_weight='balanced')
+        svc_pipeline.fit(X_train, y_train)
 
-    stats_ = [var_] +\
-    lm_.tvalues[['diagnosis[T.HC]', 'sex', 'age']].tolist() + \
-    lm_.pvalues[['diagnosis[T.HC]', 'sex', 'age']].tolist() + \
-    [aov_.loc['diagnosis', "F"], aov_.loc['diagnosis', "PR(>F)"]]
+        # Subsample dataset to speed-up computation
+        #X_train_sample = X_train.iloc[np.random.choice(X_train.shape[0], 5, replace=False)]
+        X_train_sample = X_train
+        explainer = shap.KernelExplainer(svc_pipeline.decision_function, X_train_sample) 
+        shap_values = explainer.shap_values(X_test)
+        #np.save(os.path.join(WD, "models/ShapValues", "SHAP_randomized.npy"), shap_values)
+        pd.DataFrame(shap_values, columns=X_train.columns).\
+            to_csv(os.path.join(WD, "models/ShapValues/SHAP_randomized_%i.csv" % i), index=False)
+        shap_values_list.append(shap_values)
 
-    stats.append(stats_)
-
-stats = pd.DataFrame(stats, columns=
-    ['ROI', 'diag_t', 'sex_t', 'age_t', 'diag_p', 'sex_p', 'age_p', 'site_f', 'site_p'])
-
-# Change back to original variable names
-stats.ROI = stats.ROI.str.replace('_MINUS_', '-')
-stats.ROI = stats.ROI.str.replace('_PLUS_', '+')
-data.columns = data.columns.str.replace('_MINUS_', '-')
-data.columns = data.columns.str.replace('_PLUS_', '+')
-
-_, pcor, _, _  = multipletests(stats.diag_p, method='hs')
-np.sum(pcor < 0.05) == 130
-
-_, pcor, _, _  = multipletests(stats.diag_p, method='bonferroni')
-np.sum(pcor < 0.05) == 122
-
-stats['diag_pcor'] = pcor
-
-stats.to_excel(os.path.join(WD, "models/statistics_univ", "statsuniv_roisBD.xlsx"),
-    sheet_name='statsuniv_roisBD_residualized_and_scaled', index=False)
-
-# %% Randomize Shap values
-
-X = data.loc[:, 'l3thVen_GM_Vol':]
-y = data.diagnosis
-
-shap_values_list = list()
-for i in range(1, 10): #range(5):
-    y = np.random.permutation(y)
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y)
-    ss = StandardScaler()
-    X_train = pd.DataFrame(ss.fit_transform(X_train), columns=X.columns)
-    X_test = pd.DataFrame(ss.transform(X_test), columns=X.columns)
-
-    #svc_pipeline = Pipeline([
-    #    ('scaler', StandardScaler()), 
-    #    ('svc', SVC(C=1.0, kernel='rbf', probability=True, class_weight='balanced'))
-    #])
-    svc_pipeline = SVC(C=1.0, kernel='rbf', probability=True, class_weight='balanced')
-    svc_pipeline.fit(X_train, y_train)
-
-    # Subsample dataset to speed-up computation
-    #X_train_sample = X_train.iloc[np.random.choice(X_train.shape[0], 5, replace=False)]
-    X_train_sample = X_train
-    explainer = shap.KernelExplainer(svc_pipeline.decision_function, X_train_sample) 
-    shap_values = explainer.shap_values(X_test)
-    #np.save(os.path.join(WD, "models/ShapValues", "SHAP_randomized.npy"), shap_values)
-    pd.DataFrame(shap_values, columns=X_train.columns).\
-        to_csv(os.path.join(WD, "models/ShapValues", "SHAP_randomized_%i.csv" % i), index=False)
-    shap_values_list.append(shap_values)
-
-# print("shap_values =", shap_values)
-# print("base value =", explainer.expected_value)
-# shap_values.shape == (861, 284)
-#shap.plots.waterfall(shap_values[0])
+    # print("shap_values =", shap_values)
+    # print("base value =", explainer.expected_value)
+    # shap_values.shape == (861, 284)
+    #shap.plots.waterfall(shap_values[0])
 
 # %% Select relevant features based on significance of SHAP values
+# ================================================================
+#
 # Input: 
 # - 'models/ShapValues/SHAP_randomized_*.csv' files
 # - "models/statistics_univ/statsuniv_roisBD.xlsx" file
@@ -175,6 +136,8 @@ shap_stat.to_excel(os.path.join(WD, "models/ShapValues/SHAP_roi_univstat.xlsx"),
 
 
 # %% Split variable into specifics and suppressors
+# =================================================
+
 # Input: "models/ShapValues/SHAP_roi_univstat.xlsx"
 """
 https://www.journals.uchicago.edu/doi/pdf/10.5243/jsswr.2010.2

@@ -4,8 +4,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import roc_auc_score, balanced_accuracy_score
 import pandas as pd
 from utils import standard_error, save_pkl, read_pkl, \
-    get_participants, get_predict_sites_list, has_nan, has_zeros, get_classifier,\
-        get_LOSO_CV_splits_N763, get_scores, create_folder_if_not_exists
+    get_participants, get_predict_sites_list, has_nan, has_zeros_col, get_classifier,\
+        get_LOSO_CV_splits_N763, get_scores, create_folder_if_not_exists, get_LOSO_CV_splits_N861
 
 sys.path.append('/neurospin/psy_sbox/temp_sara/')
 from pylearn_mulm.mulm.residualizer import Residualizer
@@ -13,8 +13,64 @@ from pylearn_mulm.mulm.residualizer import Residualizer
 RESULTSFOLDER="/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/results_classif/classifSBM/"
 DATAFOLDER="/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/data/processed/"
 
+def get_N861(SBMdf):
+    splits = get_LOSO_CV_splits_N861()    
+    # read participants dataframe
+    participants = get_participants()
+    # select the participants for VBM ROI (train+test participants of any of the 12 splits)
+    # it has to be for max training set size, otherwise it won't cover the whole range of subjects
+    participants_all = list(splits["Baltimore-"+str(800)][0])+list(splits["Baltimore-"+str(800)][1])
+    msk = list(participants[participants['participant_id'].isin(participants_all)].index)
+    participants_VBM = participants.iloc[msk]   
+    participants_VBM = participants_VBM.reset_index(drop=True)
+
+    formula_res, formula_full = "site + age + sex", "site + age + sex + dx"
+    residualizer = Residualizer(data=participants_VBM, formula_res=formula_res, formula_full=formula_full)
+    Zres = residualizer.get_design_mat(participants_VBM)
+
+    VBMdf = pd.read_csv(DATAFOLDER+"VBMROI_Neuromorphometrics.csv")
+    VBMdf["participant_id"] = VBMdf["participant_id"].str.removeprefix("sub-") 
+    # reorder VBMdf to have rows in the same order as participants_VBM
+    VBMdf = VBMdf.set_index('participant_id').reindex(participants_VBM["participant_id"].values).reset_index()
+
+    SBMdf = pd.merge(SBMdf, participants_VBM[["participant_id","dx"]], on ="participant_id")
+    SBMroi = [roi for roi in list(SBMdf.columns) if roi!="participant_id" and roi!="dx"]
+    assert len(SBMroi)==331 # 296 ROI + 34 subcortical ROI + TIV
+
+    # get mean of SBM values across all HC and BD subjects
+    HC_means = SBMdf[SBMdf["dx"]==0][SBMroi].mean()
+    BD_means = SBMdf[SBMdf["dx"]==1][SBMroi].mean()
+    # convert to a one-row dataframe
+    HC_means = HC_means.to_frame().T  
+    BD_means = BD_means.to_frame().T  
+
+    #participants with VBM values and not SBM values (861-763=98 participants)
+    participantsVBM_no_SBM = [p for p in VBMdf["participant_id"].values if p not in SBMdf["participant_id"].values]
+    participantsVBM_no_SBM_HC = [p for p in participantsVBM_no_SBM if p in list(participants_VBM[participants_VBM["dx"]==0]["participant_id"].values)]
+    participantsVBM_no_SBM_BD = [p for p in participantsVBM_no_SBM if p in list(participants_VBM[participants_VBM["dx"]==1]["participant_id"].values)]
+    assert len(participantsVBM_no_SBM_HC)+len(participantsVBM_no_SBM_BD) == len(participantsVBM_no_SBM)
+
+    # Repeat the single row len(participantsVBM_no_SBM_HC) times and add "participant_id"
+    HC_means = HC_means.loc[HC_means.index.repeat(len(participantsVBM_no_SBM_HC))].reset_index(drop=True)
+    HC_means.insert(0, "participant_id", participantsVBM_no_SBM_HC) 
+    HC_means["dx"] = 0
+ 
+    BD_means = BD_means.loc[BD_means.index.repeat(len(participantsVBM_no_SBM_BD))].reset_index(drop=True)
+    BD_means.insert(0, "participant_id", participantsVBM_no_SBM_BD)  
+    BD_means["dx"] = 1
+
+    newSBM = pd.concat([HC_means,BD_means],axis=0)
+    SBMdf_861 = pd.concat([SBMdf, newSBM],axis=0)
+    assert len(SBMdf_861)==861
+    SBMdf_861 = SBMdf_861.set_index('participant_id').reindex(participants_VBM["participant_id"].values).reset_index()
+    print(SBMdf_861)
+    print(participants_VBM)
+    quit()
+
+    return SBMdf_861, participants_VBM, splits
+
 def run(classif, datasize, save=False, compute_shap=False, atlas="Desikan", include_subcorticalROI=True,\
-        seven_subcortical_Nunes_replicate=False):
+        seven_subcortical_Nunes_replicate=False, classif_augmented_SBMROI=False):
     """
         classif : (str) classifier name (it has to be "MLP","L2LR","svm","xgboost", or "EN")
         datasize : (int) has to be 75, 150, 200, 300, 400, 450, 500, 600, or 700
@@ -24,11 +80,16 @@ def run(classif, datasize, save=False, compute_shap=False, atlas="Desikan", incl
         atlas : (str) "Destrieux" or "Desikan", the atlas name used to generate SBM ROI 
         include_subcortical : (bool), whether we inlcude all subcortical measures to the SBM ROI for classification 
                 the alternative is having only cortical thickness and surface area measures. 
+        classif_augmented_SBMROI : (bool) use SBM ROI with data imputation (only for stacking for the meta-model)
     """
 
     assert atlas in ["Desikan", "Destrieux"], "wrong atlas name!"
     assert classif in ["MLP","L2LR","svm","xgboost","EN"], "wrong classifier name"
     assert not (seven_subcortical_Nunes_replicate and not include_subcorticalROI)
+    if classif_augmented_SBMROI: assert classif=="EN" and atlas=="Destrieux" and include_subcorticalROI and \
+        not seven_subcortical_Nunes_replicate, "not the right parameters for SBM ROI classification for stacking"
+    if classif_augmented_SBMROI: assert datasize in [100,175,250,350,400,500,600,700,800],"wrong training dataset size!"
+    else: assert datasize in [75, 150, 200, 300, 400, 450, 500, 600, 700],"wrong training dataset size!"
 
     # read splits
     splits = get_LOSO_CV_splits_N763()
@@ -59,12 +120,11 @@ def run(classif, datasize, save=False, compute_shap=False, atlas="Desikan", incl
     if seven_subcortical_Nunes_replicate: str_7ROI = "_7ROIsub"
     else : str_7ROI = ""
     SBMdf = pd.read_csv(DATAFOLDER+"SBMROI_"+atlas+"_CT_SA_subcortical"+str_7ROI+"_N763.csv")
-    
- 
-    SBMdf["participant_id"] = SBMdf["participant_id"].str.removeprefix("sub-") 
+
     # reorder SBMdf to have rows in the same order as participants_SBM
     SBMdf = SBMdf.set_index('participant_id').reindex(participants_SBM["participant_id"].values).reset_index()
 
+    if classif_augmented_SBMROI: SBMdf, participants_SBM, splits = get_N861(SBMdf)
    
     for site in get_predict_sites_list(): 
         print("running site : ",site)
@@ -72,8 +132,12 @@ def run(classif, datasize, save=False, compute_shap=False, atlas="Desikan", incl
         # get training and testing ROI dataframes (contains participant_id + TIV in addition to 330 ROIs)
         df_tr_ = SBMdf[SBMdf["participant_id"].isin(splits[site+"-"+str(datasize)][0])]
         df_te_ = SBMdf[SBMdf["participant_id"].isin(splits[site+"-"+str(datasize)][1])]
-                
-
+        print(SBMdf)
+        print(df_tr_["dx"])
+        print(participants_SBM["dx"])
+        print(pd.merge(df_tr_, participants_SBM, on ="participant_id"))
+        quit()
+        
         y_train = pd.merge(df_tr_, participants_SBM, on ="participant_id")["dx"].values
         y_test = pd.merge(df_te_, participants_SBM, on ="participant_id")["dx"].values
         
@@ -83,9 +147,6 @@ def run(classif, datasize, save=False, compute_shap=False, atlas="Desikan", incl
         
         assert list(y_train)==list(participants_SBM.iloc[train]["dx"].values)
         assert list(y_test)==list(participants_SBM.iloc[test]["dx"].values)
-
-        Zres_train = Zres[train]
-        Zres_test = Zres[test]
 
         # drop participant_ids and TIV measures
         df_tr_ = df_tr_.drop(columns=["participant_id", "TIV"])
@@ -108,18 +169,19 @@ def run(classif, datasize, save=False, compute_shap=False, atlas="Desikan", incl
         print("shape train: ",np.shape(X_train), ", test: ", np.shape(X_test))
         print("type train: ",type(X_train), ", test: ", type(X_test))
         print("roi_names : ", np.shape(roi_names), type(roi_names), " len ", len(roi_names))
+        quit()
 
         assert not has_nan(X_train) and not has_nan(X_test)
-        if has_zeros(X_test) : 
-            print("X_test has zeros")
+        if has_zeros_col(X_test) : 
+            print("X_test has columns of only zeros")
             zero_columns_te = df_te_.columns[(df_te_ == 0).all()]
             # print(df_te_[zero_columns_te])
             if zero_columns_te.tolist() != ['5th-Ventricle']: 
                 print(df_te_[zero_columns_te])
                 quit()
 
-        if has_zeros(X_train) : 
-            print("X_train has zeros")
+        if has_zeros_col(X_train) : 
+            print("X_train has columns of only zeros")
             zero_columns_tr = df_tr_.columns[(df_tr_ == 0).all()]
             if zero_columns_tr.tolist() != ['5th-Ventricle']: 
                 print(df_te_[zero_columns_tr])
@@ -129,9 +191,9 @@ def run(classif, datasize, save=False, compute_shap=False, atlas="Desikan", incl
         classifier = get_classifier(classif)
 
         # fit residualizer
-        residualizer.fit(X_train, Zres_train)
-        X_train = residualizer.transform(X_train, Zres_train)
-        X_test = residualizer.transform(X_test, Zres_test)
+        residualizer.fit(X_train, Zres[train])
+        X_train = residualizer.transform(X_train, Zres[train])
+        X_test = residualizer.transform(X_test, Zres[test])
 
         # scale
         scaler_ = StandardScaler()
@@ -151,6 +213,7 @@ def run(classif, datasize, save=False, compute_shap=False, atlas="Desikan", incl
         
         # get classification scores for current classifier
         score_test = get_scores(classifier, X_test)
+        score_train = get_scores(classifier, X_train)
 
         if compute_shap :
             assert datasize==700, "shap values should be computed only at maximum training set size!"
@@ -166,7 +229,6 @@ def run(classif, datasize, save=False, compute_shap=False, atlas="Desikan", incl
             save_pkl(shap_values,RESULTSFOLDER+"shap/ShapValues_SBM_ROI_"+classif+"_"+site+"_"+atlas+".pkl")
             # if showplot : shap.summary_plot(shap_values, X_test, feature_names=list(df_te_.columns))
                 
-        dict_score_by_site[site]= score_test
         roc_auc = roc_auc_score(y_test, score_test)
         bacc = balanced_accuracy_score(y_test, y_pred)
 
@@ -177,6 +239,7 @@ def run(classif, datasize, save=False, compute_shap=False, atlas="Desikan", incl
         print("site : ",site," roc auc ", round(roc_auc,3), " bacc", round(bacc,3))
         print("...done.")
         metrics_dict[site] = {"roc_auc": roc_auc, "balanced-accuracy":bacc}
+        dict_score_by_site[site] = {"score test": score_test,"score train": score_train}
 
     print("\n",classif , "roc auc mean % :", round(100*np.mean(roc_auc_list,axis=0),2))
     print("bacc mean % :", round(100*np.mean(bacc_list,axis=0),2))
@@ -189,7 +252,6 @@ def run(classif, datasize, save=False, compute_shap=False, atlas="Desikan", incl
     print("Balanced Accuracy Standard Error:", np.round(se_bacc,3))
     metrics_dict["mean over all sites"] = {"roc_auc": np.mean(roc_auc_list), "balanced-accuracy":np.mean(bacc_list)}
 
-    # save_pkl(dict_score_by_site, os.getcwd()+"/test17janv25_"+features+".pkl")
     # if classif=="EN" and datasize ==700: save_pkl(coefs_dict, "coefficientsdictEN700_"+atlas+sub_roi+"_janv25.pkl")
     if not include_subcorticalROI: 
         strsub = "_no_subcortical"
@@ -202,6 +264,15 @@ def run(classif, datasize, save=False, compute_shap=False, atlas="Desikan", incl
             strsub = ""
             folder = ""
     results_file = RESULTSFOLDER+folder+str(classif)+"_N"+str(datasize)+"_"+atlas+"_SBM_ROI"+strsub+"_N763.pkl"
+
+    if classif=="EN" and atlas=="Destrieux" and include_subcorticalROI and \
+        not seven_subcortical_Nunes_replicate :
+        create_folder_if_not_exists(RESULTSFOLDER+"/stacking")
+        create_folder_if_not_exists(RESULTSFOLDER+"/stacking/SVMRBF_VBMROI")
+        scores_filepath = RESULTSFOLDER+"/stacking/SVMRBF_VBMROI/scores_tr_te_N861.pkl"
+        if not os.path.exists(scores_filepath):
+            print("saving scores for stacking ...")
+            save_pkl(dict_score_by_site,scores_filepath)
     
     if save:
         print("\nsaving classification results ...")
@@ -279,6 +350,11 @@ def main():
     # to run the classification with the best-performing classifier (EN) and maximum training set size : 
     run("EN",700, atlas="Destrieux", include_subcorticalROI=True, compute_shap=True, save=False)
     """
+    run("EN", 800, atlas="Destrieux", include_subcorticalROI=True, classif_augmented_SBMROI=True)
+
+    for size in [100,175,250,350,400,500,600,700,800]:
+        run("EN", size, atlas="Destrieux", include_subcorticalROI=True, classif_augmented_SBMROI=True)
+    quit()
     # to run classification for all training set sizes and all 5 ML classifiers for Destrieux atlas with subcortical ROI
     for atlas in ["Destrieux"]:
         for include_subcorticalROI in [True]:

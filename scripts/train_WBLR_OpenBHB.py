@@ -601,7 +601,21 @@ def train_normative_model(estimate_ = False, VBM = False, SBM = False, SBM_subco
                     standardize=False, warp = "WarpSinArcsinh")
     
    
+"""
+STEP 1 : create response and covariates files for training of normative model on VBM or SBM ROI
+        save_responses_and_covariates_ROI_OpenBHB()
+        make sure 'site' variable is None to only select OpenBHB subjects to generate resp and cov files
 
+
+        Supplementary experiments (on VBM ROI only, since VBM ROI classification outperforms SBM ROI classification, we chose
+            to implement these experiments only for VBM ROI)
+         to train on concatenated OpenBHB + BIOBD/BSNIP on the HC of the training set for each fold (for Baltimore site here): 
+            save_responses_and_covariates_ROI_OpenBHB(concatenateOpenBHBBIOBDBSNIP=True, site="Baltimore")
+         to train on BIOBD/BSNIP on the HC of the training set for each fold :
+            save_responses_and_covariates_ROI_OpenBHB(concatenateOpenBHBBIOBDBSNIP=False, site="Baltimore")
+
+
+"""
 
 def main():
     """ 

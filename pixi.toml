@@ -19,6 +19,7 @@ shap = ">=0.46.0,<0.47"
 matplotlib = ">=3.10.0,<4"
 seaborn = ">=0.13.2,<0.14"
 nilearn = ">=0.11.1,<0.12"
+fsleyes = ">=1.13.0,<2"
 
 [pypi-dependencies]
 semopy = { version = "*"}

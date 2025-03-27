@@ -5,6 +5,7 @@ from PCNtoolkit.pcntoolkit.normative import predict
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import seaborn as sns
+import re
 from scipy.stats import ttest_1samp
 from sklearn.metrics import roc_auc_score, balanced_accuracy_score
 from classif_VBMROI import remove_zeros
@@ -15,10 +16,11 @@ from utils import get_participants, get_predict_sites_list,save_pkl, has_nan, ha
 sys.path.append('/neurospin/psy_sbox/temp_sara/')
 from pylearn_mulm.mulm.residualizer import Residualizer
 
-DATAFOLDER="/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/data/processed/"
+ROOT= "/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/"
+DATAFOLDER= ROOT+"data/processed/"
 NEUROMORPHOMETRICS_LABELS="/neurospin/hc/openBHB/resource/cat12vbm_labels.txt"
-PATH_ALL_CLASSIF_DF = "/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/results_classif/all_classification_results_dataframe.pkl"
-PATH_ZSCORES_CLASSIF_DF = "/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/results_classif/zscores_classification_results_dataframe.csv"
+PATH_ALL_CLASSIF_DF = ROOT+"esults_classif/all_classification_results_dataframe.pkl"
+PATH_ZSCORES_CLASSIF_DF = ROOT+"results_classif/zscores_classification_results_dataframe.csv"
 
 def get_roi_labels():
     roilabels = np.loadtxt(NEUROMORPHOMETRICS_LABELS, dtype=str)
@@ -246,7 +248,7 @@ def create_resp_cov_BIOBDBSNIP(VBM=False, SBM=False,atlas_SBM="Desikan", SBM_sub
         
         if VBM :
             X_train, X_test, rois_train, rois_test , covariates_tr, covariates_te = \
-                get_VBM_data_for_current_site(site, datasize ,participants_VBM, VBMdf, residualizer, Zres, splits, verbose=verbose)
+                get_VBM_data_for_current_site(site, datasize ,participants_VBM, VBMdf, residualizer, Zres, splits)
         
         if SBM:
             X_train, X_test, rois_train, rois_test , covariates_tr, covariates_te = \
@@ -376,27 +378,36 @@ def create_bspline_basis_BIOBDBSNIP(VBM=False, SBM=False, SBM_subcortical=False,
     print("...done.")
 
 def run_predictions_on_LOSO_BIOBDBSNIP_rois(modelname="blr_VBM_Neuromorphometrics",model_type="blr", \
-                                    VBM=True, SBM=False, SBM_subcortical=False, atlas_SBM ="Desikan",datasize=700, N763=True):
+                                    VBM=True, SBM=False, SBM_subcortical=False, atlas_SBM ="Desikan",datasize=700, N763=True,\
+                                        concatenateOpenBHBBIOBDBSNIP=False, onlyBIOBDBSNIP=False):
     """
         evaluate BIOBD BSNIP ROI on normative models trained with VBM ROI, SBM ROI, or SBM surbcortical ROI
+        concatenateOpenBHBBIOBDBSNIP (bool) : only used for supplementary experiment. if True, we evaluate deviation scores from
+                a NM trained on OpenBHB concatenated with the healthy controls of the classification training set data of BIOBD/BSNIP 
+                for each LOSO CV fold (data left out from the current fold's acquisition site). 
+                In this case, one NM was trained for each train/test split of the LOSO-CV scheme, and only VBM ROI was used.
+                in the paper, the reported results are achieved with N763=True and datasize=700 
+        onlyBIOBDBSNIP (bool) : only used for supplementary experiment. if True, we evaluate deviation scores from
+                a NM trained only using the healthy controls of the classification training set data of BIOBD/BSNIP 
+                for each LOSO CV fold (data left out from the current fold's acquisition site). 
+                Like when concatenateOpenBHBBIOBDBSNIP is True, one NM was trained for each train/test split of the LOSO-CV scheme, 
+                and only VBM ROI was used + in the paper, the reported results are achieved with N763=True and datasize=700 
     """
     
-
-    if N763: assert datasize in [75, 150, 200, 300, 400, 450, 500, 600, 700],"wrong training dataset size!"
-    else: assert datasize in [100,175,250,350,400,500,600,700,800],"wrong training dataset size!"
+    if N763: assert datasize in [75, 150, 200, 300, 400, 450, 500, 600, 700], "wrong training dataset size!"
+    else: assert datasize in [100,175,250,350,400,500,600,700,800], "wrong training dataset size!"
+    assert not (onlyBIOBDBSNIP and concatenateOpenBHBBIOBDBSNIP),"concatenateOpenBHBBIOBDBSNIP and onlyBIOBDBSNIP cannot both be true, as they refer to different normative models"
 
     assert not(SBM and VBM),"both preprocessings can't be used simultaneously"
     assert atlas_SBM in ["Desikan","Destrieux"], "SBM atlas has to be either Desikan or Destrieux"
  
     if SBM : VBM = False
 
-    if VBM : assert modelname =="blr_VBM_Neuromorphometrics","wrong model name"
+    if VBM : assert modelname =="blr_VBM_Neuromorphometrics", "wrong model name"
     if not SBM_subcortical :
         if SBM and atlas_SBM=="Destrieux": assert modelname == "blr_SBM_Destrieux","wrong model name"
         if SBM and atlas_SBM=="Desikan" :assert modelname == "blr_SBM_Desikan","wrong model name"
     if SBM_subcortical: assert modelname=="blr_SBM_subcortical"
-
-    print("model : ",modelname)
 
     if SBM_subcortical: str_sub = "_subcortical"
     else : str_sub = ""
@@ -414,28 +425,66 @@ def run_predictions_on_LOSO_BIOBDBSNIP_rois(modelname="blr_VBM_Neuromorphometric
     create_folder_if_not_exists(respath)
 
     for site in get_predict_sites_list():
+        if concatenateOpenBHBBIOBDBSNIP or onlyBIOBDBSNIP : 
+            assert VBM, "SBM not implemented for training of normative model with BIOBDBSNIP HC or BIOBDBSNIP HC concatenated to OpenBHB data"
+            if concatenateOpenBHBBIOBDBSNIP : modelname_ = modelname+"_concatenateOpenBHB_BIOBDBSNIP_HC_"+site
+            if onlyBIOBDBSNIP : modelname_ = modelname+"_onlyBIOBDBSNIP_HC_"+site
+            modelpath = os.path.join(os.getcwd(), "NormativeModeling/models/"+modelname_+"/Models")
         print("site : ",site)
         respath_ = os.path.join(respath, site)
+        if concatenateOpenBHBBIOBDBSNIP or onlyBIOBDBSNIP : 
+            if concatenateOpenBHBBIOBDBSNIP : respath_ = os.path.join(os.getcwd(), "NormativeModeling/models/"+modelname+"_concatenateOpenBHB_BIOBDBSNIP_HC_zscores")
+            if onlyBIOBDBSNIP : respath_ = os.path.join(os.getcwd(), "NormativeModeling/models/"+modelname+"_onlyBIOBDBSNIP_HC_zscores")
+            create_folder_if_not_exists(respath_)
+            respath_ = os.path.join(respath_, site)
+
         create_folder_if_not_exists(respath_)
-        print("respath_ ",respath_)
         datapath = os.path.join(os.getcwd(), "NormativeModeling/BIOBDBSNIP/"+site)
-        print("datapath ",datapath)
+        print("model : ",modelname)
 
         cov_file_trLOSO= os.path.join(datapath,'cov_bspline_tr'+preproc+str_sub+"_"+str(datasize)+str_N763+'.txt')
         resp_file_trLOSO = os.path.join(datapath, 'resp_tr'+preproc+str_sub+"_"+str(datasize)+str_N763+'.txt')
         cov_file_teLOSO = os.path.join(datapath, 'cov_bspline_te'+preproc+str_sub+str_N763+'.txt')
-        # fixed test size so no need for str(datasize)
+        # fixed test size so no need for "str(datasize)"
         resp_file_teLOSO = os.path.join(datapath, 'resp_te'+preproc+str_sub+str_N763+".txt")
+        print(resp_file_trLOSO)
+        print(resp_file_teLOSO)
 
         print("cov file tr \n", np.shape(np.loadtxt(cov_file_trLOSO)))
         print("resp file tr \n",np.shape(np.loadtxt(resp_file_trLOSO)))
         print("cov file te \n", np.shape(np.loadtxt(cov_file_teLOSO)))
         print("resp file te \n",np.shape(np.loadtxt(resp_file_teLOSO)))
-    
+
+
         respath_tr = os.path.join(respath_,"LOSOtrain_"+str(datasize)+str_N763)
         print(respath_tr)
         create_folder_if_not_exists(respath_tr)
         print("respath_tr ",respath_tr)
+
+        existing_ids = {int(re.match(r'NM_0_(\d+)_estimate\.pkl', f).group(1)) 
+                for f in os.listdir(modelpath) if re.match(r'NM_0_(\d+)_estimate\.pkl', f)}
+        missing_ids = sorted(set(range(280)) - existing_ids)
+        print("len(existing_ids)",len(existing_ids))
+
+        # delete ROIs for which the normative model has not been able to estimate a norm
+        # in our case, this only happens when the WBLR is being trained on BIOBD/BSNIP healthy controls only, in the case
+        # of galway being the held-out site (that is not being used to train the WBLR), and the WBLR estimation failed for only one ROI
+        if missing_ids != []:
+            print("the normative model failed to estimate a norm for at least one ROI!")
+            resp_tr = np.loadtxt(resp_file_trLOSO)
+            resp_te = np.loadtxt(resp_file_teLOSO)
+            if len(missing_ids)==1:
+                resp_tr_new = np.delete(resp_tr, missing_ids[0], axis=1)
+                resp_te_new = np.delete(resp_te, missing_ids[0], axis=1)
+            else : 
+                print("more than one model failed training for site ",site)
+                quit()
+            resp_file_trLOSO_modified = os.path.join(datapath, 'resp_tr'+preproc+str_sub+"_"+str(datasize)+str_N763+'_modified.txt')
+            resp_file_teLOSO_modified = os.path.join(datapath, 'resp_te'+preproc+str_sub+str_N763+"_modified.txt")
+            if len(existing_ids)!=resp_tr.shape[1]: np.savetxt(resp_file_trLOSO_modified, resp_tr_new)
+            if len(existing_ids)!=resp_te.shape[1]: np.savetxt(resp_file_teLOSO_modified, resp_te_new)
+            resp_file_trLOSO = resp_file_trLOSO_modified
+            resp_file_teLOSO = resp_file_teLOSO_modified
 
         if os.path.exists(respath_tr):
             predict(cov_file_trLOSO,
@@ -452,12 +501,16 @@ def run_predictions_on_LOSO_BIOBDBSNIP_rois(modelname="blr_VBM_Neuromorphometric
                     respfile=resp_file_teLOSO,
                     model_path= modelpath,
                     save_path = respath_te)
-            
-def get_zscore_array(modelname, site, train=False, test=False, datasize=700, N763=True):   
+
+
+def get_zscore_array(modelname, site, train=False, test=False, datasize=700, N763=True,\
+                     concatenateOpenBHBBIOBDBSNIP=False, onlyBIOBDBSNIP=False):   
     if N763: str_N763= "_N763"
     else : str_N763 = "_N861"
 
     datapath = os.path.join(os.getcwd(), "NormativeModeling/models/"+modelname+"/LOSO_BIOBDBSNIP/"+site)
+    if concatenateOpenBHBBIOBDBSNIP: datapath = os.path.join(os.getcwd(), "NormativeModeling/models/blr_VBM_Neuromorphometrics_concatenateOpenBHB_BIOBDBSNIP_HC_zscores/"+site)
+    if onlyBIOBDBSNIP : datapath = os.path.join(os.getcwd(), "NormativeModeling/models/blr_VBM_Neuromorphometrics_onlyBIOBDBSNIP_HC_zscores/"+site)
 
     if train : 
         resp_path = datapath+"/LOSOtrain_"+str(datasize)+str_N763
@@ -483,8 +536,12 @@ def VBM_ROI_names_with_cols_of_zeros(df):
     column_names = df.columns.tolist()
     return column_names
 
-def remove_roi_extreme(array, roisBD, verbose = True):
+def remove_roi_extreme(array, roisBD, verbose = True, onlyBIOBDBSNIP=False, site=None):
     column_names = VBM_ROI_names_with_cols_of_zeros(roisBD)
+
+    if onlyBIOBDBSNIP and site =="galway":
+        column_names.pop(20)
+
     df_array = pd.DataFrame(array, columns=column_names)
     listmax = np.array(df_array.max())
     listmin = np.array(df_array.min())
@@ -503,9 +560,11 @@ def remove_roi_extreme(array, roisBD, verbose = True):
         u = list(column_names[indices_max])+list(column_names[indices_min])
         extremeROI = list(set(u))
         print(extremeROI)
-        if not set(u) <= set(['rFusGy_GM_Vol' ,'rMidOccGy_GM_Vol', 'lSupOccGy_GM_Vol' ,'lSupTemGy_GM_Vol','lVenVen_CSF_Vol']):
-            print("different !")
-            quit()
+        if not onlyBIOBDBSNIP: # too many ROI with extreme zscores when the model is trained only with HC from BIOBD BSNIP (probably due to the smaller nb of subjects used to train the NM)
+            if not set(u) <= set(['rFusGy_GM_Vol' ,'rMidOccGy_GM_Vol', 'lSupOccGy_GM_Vol' ,'lSupTemGy_GM_Vol','lVenVen_CSF_Vol']):
+                # l4thVen_CSF_Vol and rVenVen_CSF_Vol are extreme only in the case of WBLR trained with BIOBD BSNIP healthy controls (supplementary experiment)
+                print("different !")
+                quit()
         print("ROI VBM with extreme z-scores : ",extremeROI)
 
     # df_array.iloc[:,indices_max] = df_array.iloc[:,indices_max].apply(lambda x: x.where(x >= 1000, 1000))
@@ -543,15 +602,22 @@ def zscores_analysis(df):
     # print("\nSummary statistics:\n", summary_stats)
 
 def run_classification(classif="svm", N763 = True, VBM=True, SBM=False, seven_subcortical_Nunes_replicate=False,\
-                       include_subcorticalROI=False, atlas_SBM="Destrieux", datasize = 700, verbose=False):
+                       include_subcorticalROI=False, atlas_SBM="Destrieux", datasize = 700, verbose=False, \
+                        concatenateOpenBHBBIOBDBSNIP=False, onlyBIOBDBSNIP=False):
     
     if N763: assert datasize in [75, 150, 200, 300, 400, 450, 500, 600, 700],"wrong training dataset size!"
     else: assert datasize in [100,175,250,350,400,500,600,700,800],"wrong training dataset size!"
 
     assert not(SBM and VBM),"both preprocessings can't be used simultaneously"
     assert atlas_SBM in ["Desikan","Destrieux"], "SBM atlas has to be either Desikan or Destrieux"
- 
-    results_dict , metrics_dict= {}, {}
+    str_BIOBDBSNIP = ""
+    if concatenateOpenBHBBIOBDBSNIP or onlyBIOBDBSNIP : 
+        assert VBM, "SBM not implemented for training of normative model with BIOBDBSNIP HC or BIOBDBSNIP HC concatenated to OpenBHB data"
+        assert datasize==700 and N763  # this line can be changed or removed if you choose to get results for the N861 dataset or other training set data sizes. 
+        if concatenateOpenBHBBIOBDBSNIP: str_BIOBDBSNIP="_concatenateOpenBHB_BIOBDBSNIP_HC"
+        elif onlyBIOBDBSNIP: str_BIOBDBSNIP= "_onlyBIOBDBSNIP_HC"
+
+    results_dict , metrics_dict= {}, {} 
     roc_auc_list , bacc_list = [], []
 
     if VBM: participants_VBM, roisdf,residualizer, Zres, splits = get_VBM_data(datasize, N763=N763)
@@ -566,14 +632,14 @@ def run_classification(classif="svm", N763 = True, VBM=True, SBM=False, seven_su
 
         if VBM :
             X_train, X_test, rois_train, rois_test , covariates_tr, covariates_te, y_tr, y_te = \
-                get_VBM_data_for_current_site(site, datasize ,participants_VBM, roisdf, residualizer, Zres, splits,return_labels=True)
+                get_VBM_data_for_current_site(site, datasize, participants_VBM, roisdf, residualizer, Zres, splits,return_labels=True)
         
         if SBM:
             X_train, X_test, rois_train, rois_test , covariates_tr, covariates_te , y_tr, y_te = \
-                get_SBM_data_for_current_site(site, datasize ,participants_SBM, roisdf, residualizer, Zres, splits, atlas=atlas_SBM, return_labels=True)
+                get_SBM_data_for_current_site(site, datasize, participants_SBM, roisdf, residualizer, Zres, splits, atlas=atlas_SBM, return_labels=True)
 
-        tr_ = get_zscore_array(modelname, site,train=True, test=False, datasize=datasize, N763=N763)
-        te_ = get_zscore_array(modelname, site,train=False, test=True, datasize=datasize, N763=N763)
+        tr_ = get_zscore_array(modelname, site,train=True, test=False, datasize=datasize, N763=N763, concatenateOpenBHBBIOBDBSNIP=concatenateOpenBHBBIOBDBSNIP, onlyBIOBDBSNIP=onlyBIOBDBSNIP)
+        te_ = get_zscore_array(modelname, site,train=False, test=True, datasize=datasize, N763=N763, concatenateOpenBHBBIOBDBSNIP=concatenateOpenBHBBIOBDBSNIP, onlyBIOBDBSNIP=onlyBIOBDBSNIP)
 
         # uncomment to look at the ROIs with zscores >1.96
         if VBM:
@@ -610,7 +676,7 @@ def run_classification(classif="svm", N763 = True, VBM=True, SBM=False, seven_su
             print(" Test : min ",np.min(te_), ' max ', np.max(te_))
 
         if VBM :
-            tr_, columns_to_keep = remove_roi_extreme(tr_, roisdf, verbose = True)
+            tr_ , columns_to_keep = remove_roi_extreme(tr_, roisdf, verbose = True, onlyBIOBDBSNIP=onlyBIOBDBSNIP, site=site)
             te_ = te_[:, columns_to_keep]
             if verbose : print(" Test : min ",np.min(te_), ' max ', np.max(te_))
 
@@ -676,8 +742,8 @@ def run_classification(classif="svm", N763 = True, VBM=True, SBM=False, seven_su
         else : preproc = "_SBM_"+atlas_SBM
 
     create_folder_if_not_exists(os.path.join(os.getcwd(),"NormativeModeling/results_classif"))
-    results_file = os.path.join(os.getcwd(),"NormativeModeling/results_classif/zscores"+preproc+"_metrics_"+str(classif)+"_N"+str(datasize)+str_N763+".pkl")
-    save_pkl(metrics_dict,results_file )
+    results_file = os.path.join(os.getcwd() ,"NormativeModeling/results_classif/zscores"+preproc+"_metrics_"+str(classif)+"_N"+str(datasize)+str_N763+str_BIOBDBSNIP+".pkl")
+    save_pkl(metrics_dict, results_file )
 
     # pklfile = "/neurospin/psy_sbox/temp_sara/NormativeModeling/scripts/stacking/z_scores_"+vbm_str+"_"+classif+str_767+".pkl"
     # save_pkl(results_dict, pklfile) 
@@ -696,12 +762,12 @@ def fill_dataframe(path, df, datasize_list, N763, VBM=False, SBM=False, include_
     for classifier in ["L2LR","EN","svm","MLP","xgboost"]:
         for datasize in datasize_list:
             resultsVBM = path+"zscores"+preproc+"_metrics_"+str(classifier)+"_N"+str(datasize)+str_N763+".pkl"
-            vbm_data = read_pkl(resultsVBM)
+            data = read_pkl(resultsVBM)
 
             for site in get_predict_sites_list():
                 df["train_size_category"].append(datasize)
-                df["test_roc_auc"].append(vbm_data[site]['roc_auc'])
-                df["test_balanced_accuracy"].append(vbm_data[site]['balanced-accuracy'])
+                df["test_roc_auc"].append(data[site]['roc_auc'])
+                df["test_balanced_accuracy"].append(data[site]['balanced-accuracy'])
                 df["fold-site"].append(site)
                 df["classifier"].append(classifier)
 
@@ -718,7 +784,7 @@ def fill_dataframe(path, df, datasize_list, N763, VBM=False, SBM=False, include_
                 if N763 : df["dataset"].append("N763")
                 else : df["dataset"].append("N861")
 
-def get_dataframe_zscores(N763=True, include_subcorticalROI=True, seven_subcortical_Nunes_replicate=False, atlas_SBM="Destrieux"):
+def get_dataframe_zscores(N763=True, include_subcorticalROI=True, atlas_SBM="Destrieux"):
 
     results = {"train_size_category":[],"test_roc_auc": [],"test_balanced_accuracy":[],\
                 "fold-site": [], "classifier": [], "feature_type":[], "atlas":[],"dataset":[]}
@@ -727,16 +793,14 @@ def get_dataframe_zscores(N763=True, include_subcorticalROI=True, seven_subcorti
         datasize_list = [75, 150, 200, 300, 400, 450, 500, 600, 700]
     else: 
         datasize_list = [100,175,250,350,400,500,600,700,800]
-
-
-    path = os.path.join(os.getcwd(),"NormativeModeling/results_classif/")
-    print(path)
     
+    path = os.path.join(os.getcwd(),"NormativeModeling/results_classif/")    
     
     fill_dataframe(path, results, datasize_list, N763, VBM=True, SBM=False, include_subcorticalROI=False)
     fill_dataframe(path, results, datasize_list, N763, VBM=False, SBM=True, include_subcorticalROI=include_subcorticalROI, atlas_SBM=atlas_SBM)
     results=pd.DataFrame(results)
-    print(results)
+    # print(results)
+    # saving to overall classification results path (not results_classif in NormativeModeling folder)
     results.to_csv(PATH_ZSCORES_CLASSIF_DF, index=None)
 
     return results
@@ -893,7 +957,7 @@ def plot_learning_curves(metric="roc_auc", N763=True, SBM=False, VBM=False, incl
     # if saveplot : plt.savefig(os.getcwd()+'/learning_curve_'+feature+'_'+metric+'.svg', format='svg')
     plt.show()
 
-def ttests_comparisons_zscores_ROI(metric="roc_auc",N763=True, SBM=False, VBM=False, include_subcorticalROI=True, \
+def ttests_comparisons_zscores_ROI(metric="roc_auc", N763=True, SBM=False, VBM=False, include_subcorticalROI=True, \
                          seven_subcortical_Nunes_replicate=False, atlas_SBM="Destrieux", training_set_size=700):
     """
     Compare performances of classifiers when z-scores or ROI are used as features 
@@ -948,94 +1012,125 @@ def ttests_comparisons_zscores_ROI(metric="roc_auc",N763=True, SBM=False, VBM=Fa
         if p_value<=0.05 and np.mean(differences)>0: print("zscores outperform ROI")
         print("\n")
 
+def read_supplementary_results(concatenateOpenBHBBIOBDBSNIP=True, onlyBIOBDBSNIP=False):
+    """
+        print supplementary classification results using zscores from NM with LOSO CV strategy, with either
+        a WBLR trained on both OpenBHB and HC of the train sets (by fold) of BIOBD/BSNIP (concatenateOpenBHBBIOBDBSNIP=True), 
+        or a WBLR trained only on the HC of the train sets (by fold) of BIOBD/BSNIO (onlyBIOBDBSNIP=True)
+
+        prints the classification results using zscores from the NM trained on OpenBHB only as well 
+    """
+
+    assert not (onlyBIOBDBSNIP and concatenateOpenBHBBIOBDBSNIP),"two different models"
+    results = {"train_size_category":[],"test_roc_auc": [],"test_balanced_accuracy":[],\
+                "fold-site": [], "classifier": [], "feature_type":[], "atlas":[], "dataset":[]}
+    if concatenateOpenBHBBIOBDBSNIP: str_BIOBDBSNIP="_concatenateOpenBHB_BIOBDBSNIP_HC"
+    elif onlyBIOBDBSNIP : str_BIOBDBSNIP= "_onlyBIOBDBSNIP_HC"
+    results_path = ROOT+"scripts/NormativeModeling/results_classif"
+
+    # datasize is set to max training set size for N763 dataset, which is N=700
+    
+    for classifier in ["L2LR","EN","svm","MLP","xgboost"]:
+        fullpath = results_path+"/zscores_VBM_Neuromorphometrics_metrics_"+classifier+"_N700_N763"+str_BIOBDBSNIP+".pkl" 
+        data = read_pkl(fullpath)
+        for site in get_predict_sites_list():
+            results["train_size_category"].append(700)
+            results["classifier"].append(classifier)
+            results["feature_type"].append("zscores_VBM_ROI")
+            results["test_roc_auc"].append(data[site]['roc_auc'])
+            results["test_balanced_accuracy"].append(data[site]['balanced-accuracy'])
+            results["atlas"].append("Neuromorphometrics")
+            results["dataset"].append("N763")
+            results["fold-site"].append(site)
+    results=pd.DataFrame(results)
+    print(results)
+    print("test roc auc MEAN over all LOSO folds for N=700 and N763 for NM trained on "+str_BIOBDBSNIP+"\n", \
+          round(results.groupby("classifier")["test_roc_auc"].mean()*100,2))
+    print("corresponding STD:\n", round(results.groupby("classifier")["test_roc_auc"].std()*100,2))
+    results.to_csv(ROOT+"results_classif/zscores_classif_df_supplementary_results_NM_trained_on"+str_BIOBDBSNIP+".csv", index=None)
+
+    OpenBHBonly_results_df = get_dataframe_zscores(N763=True, include_subcorticalROI=True, atlas_SBM="Destrieux")
+    OpenBHBonly_results_df=OpenBHBonly_results_df[OpenBHBonly_results_df["train_size_category"]==700]
+    OpenBHBonly_results_df = OpenBHBonly_results_df[OpenBHBonly_results_df["feature_type"]=="zscores_VBM_ROI"]
+
+    print("\n\ntest roc auc MEAN over all LOSO folds for N=700 and N763 for NM trained on OpenBHB data only (results not in supplementary but in main paper)\n", \
+          round(OpenBHBonly_results_df.groupby("classifier")["test_roc_auc"].mean()*100,2))
+    print("corresponding STD:\n", round(OpenBHBonly_results_df.groupby("classifier")["test_roc_auc"].std()*100,2))
+            
+        
+
+
+
 
 """
-ORDER TO EXECUTE FUNCTIONS 
+    ORDER TO EXECUTE FUNCTIONS 
 
-1. create_resp_cov_BIOBDBSNIP : 
-            create response and covariate files for the chosen brain measures (SBM ROI, VBM ROI, etc.) 
-            (covariates chosen here are always age and sex, and residualization on sex is 
-            performed before saving response measures)
-2. create_bspline_basis_BIOBDBSNIP: 
-            creates bspline basis depending on minimum and maximum age values of the cohort on covariates data
-3. run_predictions_on_LOSO_BIOBDBSNIP_rois:
-            evaluates the response and covariates values of BIOBD/BSNIP subjects for CLASSIFICATION train and test splits separately
-            using the right normative model (trained using train_WBLR_OpenBHB.py) depending on the chosen feature types
-            (SBM ROI, VBM ROI, etc.)
-            generates z-scores for all subjects of CLASSIFICATION train/test splits for varying training set sizes in order to generate learning curves
-4. run_classification: 
-            runs classification using zscores derived from the normative model trained for a chosen feature type (SBM ROI, VBM ROI, ...) instead of 
-            training and testing on ROI values directly
-            saves the metrics (roc auc and balanced accuracy) in pkl files in NormativeModeling/results_classif folder 
-5. get_dataframe_zscores:
-            creates a dataframe with the classification results for varying training set sizes using zscores as features (here the default is zscores
-            obtained from VBM ROI Neuromorphometrics and SBM ROI with Destrieux and 34 subcortical ROIs)
-6. plot_learning_curves:
-            plot the learning curves for classification comparing ROC-AUC (or balanced accuracy) values for varying training set sizes
-            using ROI as features or deviation scores for either VBM ROI (VBM=True) or SBM ROI (SBM=True)
-            default VBM and SBM features are the same as the previous dataframe.
-            if you wish to plot the learning curves for SBM ROI with Desikan or with SBM ROI with only 7 subcortical features, the other functions have to be run 
-            with these parameters beforehand and the results have to be added to dataframe generated in get_dataframe_zscores
-7. ttests_comparisons_zscores_ROI:
-            compare prediction accuracy using ROC-AUC or balanced-accuracy at a chosen training set size 
-            between ROI features and zscores ("NM & ROI") features.    
-            default compares dataset N763 values at maximum training set size (Nmax=700) for Destrieux + 34 subcortical ROI for SBM ROI,
-            and VBM ROI with Neuromorphometrics for VBM ROI
+    1. create_resp_cov_BIOBDBSNIP : 
+                create response and covariate files for the chosen brain measures (SBM ROI, VBM ROI, etc.) 
+                (covariates chosen here are always age and sex, and residualization on sex is 
+                performed before saving response measures)
+    2. create_bspline_basis_BIOBDBSNIP: 
+                creates bspline basis depending on minimum and maximum age values of the cohort on covariates data
+    3. run_predictions_on_LOSO_BIOBDBSNIP_rois:
+                evaluates the response and covariates values of BIOBD/BSNIP subjects for CLASSIFICATION train and test splits separately
+                using the right normative model (trained using train_WBLR_OpenBHB.py) depending on the chosen feature types
+                (SBM ROI, VBM ROI, etc.)
+                generates z-scores for all subjects of CLASSIFICATION train/test splits for varying training set sizes in order to generate learning curves
+    4. run_classification: 
+                runs classification using zscores derived from the normative model trained for a chosen feature type (SBM ROI, VBM ROI, ...) instead of 
+                training and testing on ROI values directly
+                saves the metrics (roc auc and balanced accuracy) in pkl files in NormativeModeling/results_classif folder 
+    5. get_dataframe_zscores:
+                creates a dataframe with the classification results for varying training set sizes using zscores as features (here the default is zscores
+                obtained from VBM ROI Neuromorphometrics and SBM ROI with Destrieux and 34 subcortical ROIs)
+    6. plot_learning_curves:
+                plot the learning curves for classification comparing ROC-AUC (or balanced accuracy) values for varying training set sizes
+                using ROI as features or deviation scores for either VBM ROI (VBM=True) or SBM ROI (SBM=True)
+                default VBM and SBM features are the same as the previous dataframe.
+                if you wish to plot the learning curves for SBM ROI with Desikan or with SBM ROI with only 7 subcortical features, the other functions have to be run 
+                with these parameters beforehand and the results have to be added to dataframe generated in get_dataframe_zscores
+    7. ttests_comparisons_zscores_ROI:
+                compare prediction accuracy using ROC-AUC or balanced-accuracy at a chosen training set size 
+                between ROI features and zscores ("NM & ROI") features.    
+                default compares dataset N763 values at maximum training set size (Nmax=700) for Destrieux + 34 subcortical ROI for SBM ROI,
+                and VBM ROI with Neuromorphometrics for VBM ROI
+
+
+    For supplementary experiments with BIOBD/BSNIP healthy controls (HC) used for WBLR training:
+
+    1. evaluate the BIOBD BSNIP data for each fold to get zscores, saved in NormativeModeling/models/blr_VBM_Neuromorphometrics_concatenateOpenBHB_BIOBDBSNIP_HC_zscores/
+    or NormativeModeling/models/blr_VBM_Neuromorphometrics_concatenateOpenBHB_BIOBDBSNIP_HC_zscores/
+
+        with WBLR trained on BIOBD BSNIP HC only:
+            run_predictions_on_LOSO_BIOBDBSNIP_rois(VBM=True, SBM=False, SBM_subcortical=False, datasize=700, N763=True,\
+                                                    onlyBIOBDBSNIP=True)
+        with WBLR trained on BIOBD BSNIP HC concatenated to OpenBHB subjects:
+            run_predictions_on_LOSO_BIOBDBSNIP_rois(VBM=True, SBM=False, SBM_subcortical=False, datasize=700, N763=True,\
+                                                    concatenateOpenBHBBIOBDBSNIP=True)
+
+    2. run classification using these zscores as features instead of ROI:
+        with WBLR trained on BIOBD BSNIP HC only:
+            run_classification(classif="svm", N763 = True, VBM=True, datasize = 700, verbose=False, \
+                            concatenateOpenBHBBIOBDBSNIP=False, onlyBIOBDBSNIP=True)
+
+        with WBLR trained on BIOBD BSNIP HC concatenated to OpenBHB subjects:
+            run_classification(classif="svm", N763 = True, VBM=True, datasize = 700, verbose=False, \
+                            concatenateOpenBHBBIOBDBSNIP=True, onlyBIOBDBSNIP=False)
+
+    3. read results with read_supplementary_results : if concatenateOpenBHBBIOBDBSNIP is True, printing mean ROC-AUC from classification with zscores
+            from WBLR trained on both OpenBHB and the HC of BIOBD/BSNIP for each fold, and if onlyBIOBDBSNIP is True instead, printing the ROC-AUC
+            from WBLR trained on HC of BIOBD/BSNIP for each fold only.
+
 """
 
 def main():
-    """ 
-    Parameters :
-   
-    Aim : 
-      
-    """
+    
     plot_learning_curves(VBM=True)
-    quit()
     ttests_comparisons_zscores_ROI(metric = "roc_auc", SBM=True)
     ttests_comparisons_zscores_ROI(metric = "balanced_accuracy", VBM=True)
     ttests_comparisons_zscores_ROI(metric = "balanced_accuracy", SBM=True)
     
-    quit()
-
-    """
-    for size in [75, 150, 200, 300, 400, 450, 500, 600, 700]:
-        create_resp_cov_BIOBDBSNIP(VBM=False, SBM=False,atlas_SBM="Desikan", SBM_subcortical=True, N763=True, datasize=size,\
-                                seven_subcortical_Nunes_replicate=False, verbose=True)
-        create_bspline_basis_BIOBDBSNIP(VBM=False, SBM=False, SBM_subcortical=True, atlas_SBM="Desikan",datasize=size, N763=True)
-        run_predictions_on_LOSO_BIOBDBSNIP_rois(modelname="blr_SBM_subcortical", model_type="blr", \
-                                        VBM=False, SBM=True, SBM_subcortical=True, atlas_SBM ="Destrieux",datasize=size, N763=True)
-        for classifier in  ["L2LR", "MLP","svm","xgboost","EN"]:
-            run_classification(classif=classifier, N763 = True, VBM=False, SBM=True, seven_subcortical_Nunes_replicate=False,\
-                        include_subcorticalROI=True, atlas_SBM="Destrieux", datasize = size, verbose=False)
-    
-    for size in [75, 150, 200, 300, 400, 450, 500, 600, 700]:
-        run_predictions_on_LOSO_BIOBDBSNIP_rois(modelname="blr_SBM_subcortical",model_type="blr", \
-                                        VBM=False, SBM=True, SBM_subcortical=True, atlas_SBM ="Destrieux",datasize=size, N763=True)
-
-    run_classification(classif="svm", N763 = True, VBM=False, SBM=True, seven_subcortical_Nunes_replicate=False,\
-                       include_subcorticalROI=True, atlas_SBM="Destrieux", datasize = 700, verbose=False)
-
-    for size in [75, 150, 200, 300, 400, 450, 500, 600, 700]: # 700
-        for classif in ["xgboost"]:
-            run_classification(classif=classif, N763 = True, VBM=True, datasize = size, verbose=True)
-
-    for size in [75, 150, 200, 300, 400, 450, 500, 600, 700]:
-        run_predictions_on_LOSO_BIOBDBSNIP_rois(modelname="blr_SBM_Destrieux",model_type="blr", \
-                                        VBM=False, SBM=True, SBM_subcortical=False, atlas_SBM ="Destrieux",datasize=size, N763=True)
-        run_predictions_on_LOSO_BIOBDBSNIP_rois(modelname="blr_SBM_Desikan",model_type="blr", \
-                                        VBM=False, SBM=True, SBM_subcortical=False, atlas_SBM ="Desikan",datasize=size, N763=True)
-        run_predictions_on_LOSO_BIOBDBSNIP_rois(modelname="blr_VBM_Neuromorphometrics",model_type="blr", \
-                                        VBM=True, SBM=False, SBM_subcortical=False, datasize=size, N763=True)
-        
-    for size in [75, 150, 200, 300, 400, 450, 500, 600, 700]:
-        create_bspline_basis_BIOBDBSNIP(VBM=False, SBM=True, atlas_SBM="Destrieux",datasize=size, N763=True)
-
-            for size in [75, 150, 200, 300, 400, 450, 500, 600, 700]:
-        # create_resp_cov_BIOBDBSNIP(VBM=True, SBM=False, include_subcorticalROI=False, N763=True, datasize=size)
-        create_resp_cov_BIOBDBSNIP(VBM=False, SBM=True, atlas_SBM="Destrieux", include_subcorticalROI=False, N763=True, datasize=size)
-    """
-
+   
 if __name__ == '__main__':
     main()
 

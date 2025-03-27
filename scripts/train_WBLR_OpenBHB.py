@@ -2,10 +2,11 @@ import numpy as np
 import pandas as pd, pickle, sys, os
 from classif_VBMROI import remove_zeros
 from utils import create_folder_if_not_exists, get_LOSO_CV_splits_N763, get_LOSO_CV_splits_N861, get_participants, get_predict_sites_list
+from PCNtoolkit.pcntoolkit.util.utils import create_bspline_basis
+from PCNtoolkit.pcntoolkit.normative import estimate
 sys.path.append('/neurospin/psy_sbox/temp_sara/')
 from pylearn_mulm.mulm.residualizer import Residualizer
-from PCNtoolkit.pcntoolkit.util.utils import create_bspline_basis
-from PCNtoolkit.pcntoolkit.normative import estimate, predict
+
 
 DESIKAN_LABELS="/neurospin/hc/openBHB/resource/freesurfer_atlas-desikan_labels.txt"
 DESTRIEUX_LABELS="/neurospin/hc/openBHB/resource/freesurfer_atlas-destrieux_labels.txt"
@@ -49,6 +50,7 @@ def save_dataframe_npy_by_subject_and_ROI(directory= OPENBHB_DIRECTORY, save = T
         saved dataframe containing all OpenBHB ROI measures for VBM ROI with the Neuromorphometrics atlas or
         SBM ROI with Desikan or Destrieux atlases
     """
+
     if SBM : VBM=False
     assert not (VBM and SBM), "you have to pick only one preprocessing!"
     assert atlas_SBM in ["Desikan","Destrieux"]
@@ -192,6 +194,14 @@ def get_info_OpenBHB(df_participants_,df_train_,df_test_):
     print("N =",len(np.unique(test_sites)))
 
 def get_resp_cov_fromBIOBDBSNIP(VBM=False, SBM=False, atlas_SBM="Destrieux", site="Baltimore"):
+    """
+        VBM (bool) : using VBM preprocessing
+        SBM (bool) : using SBM preprocessing
+        atlas_SBM (str) : "Destrieux" or "Desikan", atlas chosen for SBM ROI 
+        site (str) : name of acquisition site 
+        returns : dataframe of training set ROI and covariates (age and sex) for one LOSO CV fold 
+            (the site is corresponds to the site of the subjects of the test fold)
+    """
     participants = get_participants()
      
     if SBM:
@@ -269,12 +279,21 @@ def save_responses_and_covariates_ROI_OpenBHB(VBM = False, SBM=False, SBM_subcor
                                         which refers to subcortical ROI from Freesurfer (aseg) instead of CT and SA measures (SBM=True)
         atlas_SBM : (str) either "Desikan" or "Destrieux" (VBM is always Neuromorphometrics atlas)
         addsitespredictBD : (bool) whether to include BIOBD/BSNIP sites
+        
         site : (str) (site or fold for LOSO-CV); only given a value if training the WBLR on HC from each classification training set fold, or from HC
                 from each training set fold concatenated with OpenBHB subjects (which are all HC since OpenBHB is composed of healthy 'brains' only) 
-        concatenateOpenBHBBIOBDBSNIP : (bool) if site is not None, therefore we want to save the responses and covariates for either only BIOBDBSNIP HC
-                of a given fold/site, or for the concatenation of BIOBDBSNIP HC of a given fold/site with OpenBHB data
-                if True: concatenate OpenBHB and HC of BIOBDBSNIP chosen fold, if False: only BIOBDBSNIP HC of the fold if site is not None,
-                if False and site is None: save response and covariates only for OpenBHB
+                --> corresponds to the site of the testing set in LOSO-CV for ONE LOSO fold
+        
+        concatenateOpenBHBBIOBDBSNIP : (bool) if site is not None, we save the responses and covariates for either : 
+                (i) only BIOBDBSNIP HC for a given the LOSO fold/site (tr : HC of all sites except held-out site for testing, te : HC of testing site), or 
+                (ii) for the concatenation of BIOBDBSNIP HC for a given fold/site with OpenBHB data 
+                    (tr : HC of all sites except held-out site for testing concatenated with OpenBHB train set subjects, 
+                    te : HC of testing site concatenated with OpenBHB test set subjects)
+                if site is None (iii) we do not consider BIOBD BSNIP to train the NM
+                for each site : 
+                    if False (i): only BIOBDBSNIP HC of the fold if site is not None
+                    if True (ii): concatenate OpenBHB and HC of BIOBDBSNIP chosen fold, 
+                    if False and site is None (iii): save response and covariates only for OpenBHB
 
         Notes : in this function, "train" and "test" refer to training and testing splits for the normative model, whereas "evaluation"
                 refers to the data evaluated on the normative model (from the BSNIP/BIOBD cohort), 
@@ -282,6 +301,7 @@ def save_responses_and_covariates_ROI_OpenBHB(VBM = False, SBM=False, SBM_subcor
                 normative model; however, evaluating data on the model using the PCNtoolkit requires that it has the same response/covariate
                 format, with the same number of covariates, as well as response variables. 
     """
+
     if SBM_subcortical: SBM=True
     assert not (VBM and SBM), "both preprocessings can't be used simultaneously"
     assert atlas_SBM in ["Desikan", "Destrieux"]
@@ -416,7 +436,6 @@ def save_responses_and_covariates_ROI_OpenBHB(VBM = False, SBM=False, SBM_subcor
     print("tr_data_covariates",np.shape(tr_data_covariates)) #(3985, 2)
     print("te_data_covariates",np.shape(te_data_covariates)) #(666, 2)    
 
-
     assert np.shape(te_data_features)[0]==np.shape(te_data_covariates)[0], \
         "Not as many subjects in features dataframe than covariates dataframe for testing split"   
     assert np.shape(tr_data_features)[0]==np.shape(tr_data_covariates)[0], \
@@ -446,11 +465,8 @@ def save_responses_and_covariates_ROI_OpenBHB(VBM = False, SBM=False, SBM_subcor
         if concatenateOpenBHBBIOBDBSNIP: str_BIOBDBSNIP="_concatenateOpenBHB_BIOBDBSNIP_HC_"+site
         else : str_BIOBDBSNIP= "_onlyBIOBDBSNIP_HC_"+site
     else : str_BIOBDBSNIP=""
-    quit()
-    # 6) save to txt files 
-    print("Xtrain ",path   + 'cov_tr'+preproc+str_sub+str_BIOBDBSNIP+'.txt')
-    print(path + 'resp_tr'+preproc+str_sub+str_BIOBDBSNIP+'.txt')
 
+    # 6) save to txt files 
     X_train.to_csv(path   + 'cov_tr'+preproc+str_sub+str_BIOBDBSNIP+'.txt', sep = '\t', header=False, index=False)
     #cov_tr_nosite.txt
     y_train.to_csv(path + 'resp_tr'+preproc+str_sub+str_BIOBDBSNIP+'.txt', sep = '\t', header=False, index=False)
@@ -482,6 +498,7 @@ def create_bspline_basis_openBHB(VBM=False, SBM=False, SBM_subcortical=False, at
     if site:
         if concatenateOpenBHBBIOBDBSNIP: str_BIOBDBSNIP="_concatenateOpenBHB_BIOBDBSNIP_HC_"+site
         else : str_BIOBDBSNIP= "_onlyBIOBDBSNIP_HC_"+site
+        assert VBM, "SBM not implemented for supplementary experiments where the NM is training on BIOBD BSNIP data as well as OpenBHB data"
     else : str_BIOBDBSNIP=""
 
     df_participants = pd.read_csv(OPENBHB_PARTICIPANTS_FILE, delimiter='\t')
@@ -496,8 +513,7 @@ def create_bspline_basis_openBHB(VBM=False, SBM=False, SBM_subcortical=False, at
     X_tr = np.concatenate((X_tr, np.ones((X_tr.shape[0],1))), axis=1)
     X_te = np.concatenate((X_te, np.ones((X_te.shape[0],1))), axis=1)
 
-    print(X_tr) # prendre l age min et max d'ici pour quand site=True
-    quit()
+    # prendre l age min et max d'ici pour quand site=True
 
     age_min = round(min(list(df_participants["age"].unique())),1)
     age_max = round(max(list(df_participants["age"].unique())),1)
@@ -520,7 +536,6 @@ def create_bspline_basis_openBHB(VBM=False, SBM=False, SBM_subcortical=False, at
     np.savetxt(os.path.join(data_dir_, 'cov_bspline_te'+preproc+str_sub+str_BIOBDBSNIP+'.txt'), X_te)
     print("...done.")
 
- 
 def check_equal_values(list1, list2):
     for val1 in list1:
         for val2 in list2:
@@ -539,12 +554,18 @@ def get_list_npy_filenames(list_subject_ids):
     return npy_filenames
 
 def train_normative_model(estimate_ = False, VBM = False, SBM = False, SBM_subcortical=False,\
-                           atlas_SBM="Desikan",  model_type="blr"):
+                           atlas_SBM="Desikan",  model_type="blr", site=None, concatenateOpenBHBBIOBDBSNIP=False):
+    
     if SBM_subcortical: SBM=True
     if SBM : VBM=False
     if VBM: 
         SBM=False
         SBM_subcortical=False
+    if site:
+        if concatenateOpenBHBBIOBDBSNIP: str_BIOBDBSNIP="_concatenateOpenBHB_BIOBDBSNIP_HC_"+site
+        else : str_BIOBDBSNIP= "_onlyBIOBDBSNIP_HC_"+site
+    else : str_BIOBDBSNIP=""
+
     assert atlas_SBM in ["Desikan", "Destrieux"]
     assert not (VBM and SBM), "you have to pick only one preprocessing!"
 
@@ -558,7 +579,7 @@ def train_normative_model(estimate_ = False, VBM = False, SBM = False, SBM_subco
     if SBM_subcortical: str_sub = "_subcortical"
     else : str_sub = ""
 
-    modelname = model_type+preproc
+    modelname = model_type+preproc+str_BIOBDBSNIP
     if SBM_subcortical: modelname = model_type+"_SBM_"+str_sub
     if model_type =="gpr": modelname=modelname+"_"+model_type+"_withwarping"
 
@@ -566,8 +587,8 @@ def train_normative_model(estimate_ = False, VBM = False, SBM = False, SBM_subco
     # otherwise, optimizer is powell
 
     # configure the covariates to use. 
-    cov_file_tr = os.path.join(data_dir, "cov_bspline_tr"+preproc+str_sub+".txt") 
-    cov_file_te = os.path.join(data_dir, 'cov_bspline_te'+preproc+str_sub+'.txt') 
+    cov_file_tr = os.path.join(data_dir, "cov_bspline_tr"+preproc+str_sub+str_BIOBDBSNIP+".txt") 
+    cov_file_te = os.path.join(data_dir, 'cov_bspline_te'+preproc+str_sub+str_BIOBDBSNIP+'.txt') 
 
     covtr = np.loadtxt(cov_file_tr,dtype=str)
     covte = np.loadtxt(cov_file_te,dtype=str)
@@ -576,18 +597,20 @@ def train_normative_model(estimate_ = False, VBM = False, SBM = False, SBM_subco
     print("covariates :",type(covtr), type(covte))
 
     # load train & test response files
-    resp_file_tr = os.path.join(data_dir, 'resp_tr'+preproc+str_sub+'.txt') 
-    resp_file_te = os.path.join(data_dir, 'resp_te'+preproc+str_sub+'.txt')
+    resp_file_tr = os.path.join(data_dir, 'resp_tr'+preproc+str_sub+str_BIOBDBSNIP+'.txt') 
+    resp_file_te = os.path.join(data_dir, 'resp_te'+preproc+str_sub+str_BIOBDBSNIP+'.txt')
 
     resptr = np.loadtxt(resp_file_tr,dtype=float)
     respte = np.loadtxt(resp_file_te,dtype=float)
     print("responses :",np.shape(resptr), np.shape(respte), type(resptr), type(respte))
+    print(resp_file_tr)
+    quit()
 
     create_folder_if_not_exists(os.path.join(os.getcwd(),"NormativeModeling/models"))
     create_folder_if_not_exists(os.path.join(os.getcwd(),"NormativeModeling/models/"+modelname))
     path_model = os.path.join(os.getcwd(),"NormativeModeling/models/"+modelname)
     print(path_model)    
-
+    
     if estimate_ : 
         os.chdir(path_model)
         estimate(cov_file_tr,
@@ -599,33 +622,53 @@ def train_normative_model(estimate_ = False, VBM = False, SBM = False, SBM_subco
                     savemodel=True,
                     saveoutput=True,
                     standardize=False, warp = "WarpSinArcsinh")
+        os.chdir("/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/scripts/")
     
    
 """
-STEP 1 : create response and covariates files for training of normative model on VBM or SBM ROI
-        save_responses_and_covariates_ROI_OpenBHB()
-        make sure 'site' variable is None to only select OpenBHB subjects to generate resp and cov files
+    STEP 1 : create response and covariates files for training of normative model on VBM or SBM ROI
+            save_responses_and_covariates_ROI_OpenBHB()
+            make sure 'site' variable is None to only select OpenBHB subjects to generate resp and cov files
+
+    STEP 2 : create bspline basis for train and test covariates
+            create_bspline_basis_openBHB(VBM=False, SBM=False, SBM_subcortical=False, atlas_SBM="Desikan",site=None, concatenateOpenBHBBIOBDBSNIP=False)
+            keep concatenateOpenBHBBIOBDBSNIP=False and site=None when training and testing the normative model on all OpenBHB (no subjects from BIOBD/BSNIP)
+            atlas_SBM will only be taken into account if SBM is True. Choose SBM = True or VBM = True depending on the type of ROI used for your NM.
+            SBM cortical (area and cortical surface derived from Freesurfer) are treated separately from SBM subcortical measures.
+
+    STEP 3 : train normative model from covariates' bsplines and response variables. 
+                set estimate_ to True to estimate the model.
+                SBM, VBM, and SBM_subcortical variables are used the same way as in previous functions. 
 
 
-        Supplementary experiments (on VBM ROI only, since VBM ROI classification outperforms SBM ROI classification, we chose
-            to implement these experiments only for VBM ROI)
-         to train on concatenated OpenBHB + BIOBD/BSNIP on the HC of the training set for each fold (for Baltimore site here): 
-            save_responses_and_covariates_ROI_OpenBHB(concatenateOpenBHBBIOBDBSNIP=True, site="Baltimore")
-         to train on BIOBD/BSNIP on the HC of the training set for each fold :
-            save_responses_and_covariates_ROI_OpenBHB(concatenateOpenBHBBIOBDBSNIP=False, site="Baltimore")
+    Supplementary experiments (on VBM ROI only, since VBM ROI classification outperforms SBM ROI classification, we chose
+        to implement these experiments only for VBM ROI)
+        to train on concatenated OpenBHB + BIOBD/BSNIP on the HC of the training set for each fold (for Baltimore site here): 
+        1) save_responses_and_covariates_ROI_OpenBHB(VBM=True, concatenateOpenBHBBIOBDBSNIP=True, site="Baltimore")
+        2) create_bspline_basis_openBHB(VBM=True, site="Baltimore", concatenateOpenBHBBIOBDBSNIP=True)
+        3) train_normative_model(estimate_ = True, VBM = True, model_type="blr", site="Baltimore", concatenateOpenBHBBIOBDBSNIP=True)
 
-
+        to train on BIOBD/BSNIP on the HC of the training set for each fold :
+        1) save_responses_and_covariates_ROI_OpenBHB(VBM=True, concatenateOpenBHBBIOBDBSNIP=False, site="Baltimore")
+        2) create_bspline_basis_openBHB(VBM=True, site="Baltimore", concatenateOpenBHBBIOBDBSNIP=False)
+        3) train_normative_model(estimate_ = True, VBM = True, model_type="blr", site="Baltimore", concatenateOpenBHBBIOBDBSNIP=False)
 """
 
 def main():
-    """ 
-    Parameters :
-   
-    Aim : 
-      
-    """
+    save_responses_and_covariates_ROI_OpenBHB(VBM=True, concatenateOpenBHBBIOBDBSNIP=False, site="galway")
+    train_normative_model(estimate_ = True, VBM = True, SBM = False, SBM_subcortical=False,\
+                    atlas_SBM="Desikan",  model_type="blr", site="galway", concatenateOpenBHBBIOBDBSNIP=False)
+
+    quit()
+
+    for site in get_predict_sites_list():
+        train_normative_model(estimate_ = True, VBM = True, SBM = False, SBM_subcortical=False,\
+                            atlas_SBM="Desikan",  model_type="blr", site=site, concatenateOpenBHBBIOBDBSNIP=True)
+
+    quit()
     for site in get_predict_sites_list():
         save_responses_and_covariates_ROI_OpenBHB(VBM = True, SBM=False, SBM_subcortical=False, atlas_SBM="Destrieux", site=site, concatenateOpenBHBBIOBDBSNIP=True)
+        create_bspline_basis_openBHB(VBM=True, SBM=False, SBM_subcortical=False, atlas_SBM="Desikan",site=site, concatenateOpenBHBBIOBDBSNIP=False)
 
     # get_resp_cov_fromBIOBDBSNIP(VBM=False, SBM=True, SBM_atlas="Destrieux", site="Baltimore")
     quit()

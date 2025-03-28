@@ -10,8 +10,9 @@ from utils import standard_error, save_pkl, read_pkl, \
 sys.path.append('/neurospin/psy_sbox/temp_sara/')
 from pylearn_mulm.mulm.residualizer import Residualizer
 
-RESULTSFOLDER="/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/results_classif/classifSBM/"
-DATAFOLDER="/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/data/processed/"
+ROOT="/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/"
+RESULTSFOLDER=ROOT+"results_classif/classifSBM/"
+DATAFOLDER=ROOT+"data/processed/"
 
 def get_N861(SBMdf):
     splits = get_LOSO_CV_splits_N861()    

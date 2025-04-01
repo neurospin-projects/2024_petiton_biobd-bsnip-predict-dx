@@ -1,10 +1,9 @@
-import os, pickle, json, gc, sys, numpy as np, pandas as pd
+import sys, numpy as np, pandas as pd
 from sklearn.preprocessing import StandardScaler
 
 # Statmodels
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
-import scipy.stats
 from statsmodels.stats.multitest import multipletests
 
 from classif_VBMROI import remove_zeros
@@ -17,6 +16,13 @@ DATAFOLDER=ROOT+"data/processed/"
 RESULTS_FEATIMPTCE_AND_STATS_DIR=ROOT+"results_feat_imptce_and_univ_stats/"
 
 def get_scaled_data(res="no_res"):
+    """
+        res : (str) "no_res", "res_age_sex", or "res_age_sex_site" --> residualization applied to data 
+        Aim : returns a dataframe of all subjects' ROI values, age, sex, site, and diagnosis, after standard scaling 
+        By default, no residualization is applied to the data, but residualization on age and sex, or age, sex, and site
+        can be applied.
+    
+    """
     splits = get_LOSO_CV_splits_N861()    
     assert res in ["res_age_sex_site", "res_age_sex", "no_res"],"not the right residualization option for parameter 'res'!"
     # read participants dataframe
@@ -30,7 +36,6 @@ def get_scaled_data(res="no_res"):
     VBMdf = pd.read_csv(DATAFOLDER+"VBMROI_Neuromorphometrics.csv")
     # reorder VBMdf to have rows in the same order as participants_VBM
     VBMdf = VBMdf.set_index('participant_id').reindex(participants_VBM["participant_id"].values).reset_index()
-
 
     exclude_elements = ['participant_id', 'session', 'TIV', 'CSF_Vol', 'GM_Vol', 'WM_Vol']
     VBMdf = remove_zeros(VBMdf, verbose=False)
@@ -55,9 +60,8 @@ def get_scaled_data(res="no_res"):
     # fit scaler
     scaler_ = StandardScaler()
     X_arr = scaler_.fit_transform(X_arr)
-
     df_X = pd.DataFrame(X_arr , columns = list(VBMdf.columns))
-    df_X[["age", "sex", "site", "dx"]]=participants_VBM[["age", "sex", "site", "dx"]]
+    df_X[["age", "sex", "site", "dx"]] = participants_VBM[["age", "sex", "site", "dx"]]
 
     return df_X
 
@@ -157,8 +161,8 @@ STEP 4: adjust for multiple comparisons with 2 different methods: bonferroni (mo
         only on the p-values related to y (Li diag)
 STEP 5 : save results dataframe to excel file
 
-number of ROI with pvalues<0.05 for diagnosis: 
-with any type of residualization : before correction for multiple tests :  226, after Bonferroni : 120 ROI (after FDR BH: 222)
+number of ROI with pvalues<0.05 for diagnosis,
+with any type of residualization: before correction for multiple tests:  226, after Bonferroni : 120 ROI (after FDR BH: 222)
 
 """
 def main():

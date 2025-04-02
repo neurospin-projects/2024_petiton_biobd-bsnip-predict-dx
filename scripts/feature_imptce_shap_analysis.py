@@ -1,11 +1,13 @@
 import sys, os, time, scipy
 import numpy as np
+import nibabel
 import pandas as pd
 import seaborn as sns
 import nibabel as nib
-import ast
+import ast, re
 import shap
-
+import xml.etree.ElementTree as ET
+import nilearn.plotting as plotting
 
 from utils import get_predict_sites_list, read_pkl, get_LOSO_CV_splits_N861, get_participants, save_pkl
 import matplotlib.pyplot as plt
@@ -19,7 +21,8 @@ ROOT = "/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/"
 SHAP_DIR_SVMRBF=ROOT+"/models/ShapValues/shap_computed_from_all_Xtrain/"
 DATAFOLDER=ROOT+"data/processed/"
 RESULTS_FEATIMPTCE_AND_STATS_DIR=ROOT+"results_feat_imptce_and_univ_stats/"
-
+VOL_FILE_VBM = "/drf/local/spm12/tpm/labels_Neuromorphometrics.nii"
+VBMLOOKUP_FILE = "/drf/local/spm12/tpm/labels_Neuromorphometrics.xml"
 
 def make_shap_df(verbose=False):
     # SHAP only computed for VBM ROI and age+sex+site residualization
@@ -97,7 +100,6 @@ def make_shap_df(verbose=False):
     df_all_shap.to_excel(SHAP_DIR_SVMRBF+'SHAP_summary_including_shap_from_30rdm_runs.xlsx', index=False)
 
     return df_all_shap
-
 
 def get_shared_specific_or_suppressor_ROIs_btw_folds(dict_ROIs, verbose=False):
     # Convert arrays to sets and find the intersection
@@ -267,6 +269,54 @@ def read_bootstrapped_shap(save=False):
          "concatenated_shap_arrays_with_negated_CSF":concatenated_shap_arrays_negatedCSF, "concatenated_shap_arrays":concatenated_shap_arrays}
     save_pkl(dict_summary, RESULTS_FEATIMPTCE_AND_STATS_DIR+"ShapSummaryDictionnaryForBeeswarmPlot.pkl")
 
+def plot_glassbrain(): 
+    """
+        Aim : plot glassbrain of specfic ROI from SHAP values obtained with an SVM-RBF and VBM ROI features
+    
+    """
+    specific_roi_df = read_pkl(RESULTS_FEATIMPTCE_AND_STATS_DIR+"specific_ROI_SHAP_SVMRBF_VBM.pkl")
+    specific_ROI_dict = specific_roi_df.set_index('ROI')['mean_abs_shap'].to_dict()
+    print(specific_roi_df)
+    print(specific_ROI_dict)
+
+    ref_im = nibabel.load(VOL_FILE_VBM)
+    ref_arr = ref_im.get_fdata()
+    labels = sorted(set(np.unique(ref_arr).astype(int))- {0}) # 136 labels --> 'Left Inf Lat Vent', 'Right vessel', 'Left vessel' missing in data
+    atlas_df = pd.read_csv(ROOT+"data/atlases/lobes_Neuromorphometrics.csv", sep=';')
+    texture_arr = np.zeros(ref_arr.shape, dtype=float)
+    
+    
+    for name, val in specific_ROI_dict.items():
+        # get GM volume (there is one row for GM and another for CSF for each ROI but the ROIbaseid values are the same for both so we picked GM vol)
+        baseids = atlas_df[(atlas_df['ROIname'] == name) & (atlas_df['volume'] == 'GM')]["ROIbaseid"].values
+        int_list = list(map(int, re.findall(r'\d+', baseids[0])))
+        if "Left" in name: 
+            if len(int_list)==2: baseid = int_list[1]
+            else : baseid = int_list[0]
+        else : baseid = int_list[0]
+        if name in ["Left Pallidum", "Right Pallidum"]: texture_arr[ref_arr == baseid] = val
+        else : texture_arr[ref_arr == baseid] = - val
+
+    print("nb unique vals :",len(np.unique(texture_arr)))
+    print(np.shape(texture_arr))
+
+    cmap = plt.cm.coolwarm
+    vmin = np.min(texture_arr)
+    vmax = np.max(texture_arr)
+    print("vmin vmax texture arr", vmin,"     ",vmax)
+    texture_im = nibabel.Nifti1Image(texture_arr, ref_im.affine)
+
+    plotting.plot_glass_brain(
+        texture_im,
+        display_mode="ortho",
+        colorbar=True,
+        cmap=cmap,
+        plot_abs=False ,
+        alpha = 0.95 ,
+        threshold=0,
+        title="glassbrain of specific ROI")
+    plotting.show()
+
 
 def plot_beeswarm():
     """
@@ -284,7 +334,6 @@ def plot_beeswarm():
     list_rois = dict_summary["list_rois"]
     mean_abs_specific = np.mean(np.abs(concatenated_shap_arrays_negatedCSF[:,sorted_indices_specificROI]),axis=0)
 
-
     # SHAP summary plot
     # shap.summary_plot(concatenated_shap_arrays_negatedCSF[:,sorted_indices_specificROI], all_folds_Xtest_concatenated[:,sorted_indices_specificROI], \
     #                   feature_names=[dict_atlas_roi_names[list_rois[i]] for i in sorted_indices_specificROI], max_display=len(sorted_indices_specificROI))
@@ -295,9 +344,13 @@ def plot_beeswarm():
     univ_statistics = pd.read_excel(path_univ_statistics)
     stats_specific_ROI = univ_statistics[univ_statistics["ROI"].isin([list_rois[i] for i in sorted_indices_specificROI])].copy()
     recap = stats_specific_ROI[stats_specific_ROI["diag_pcor_bonferroni"] < 0.05][["ROI", "diag_pcor_bonferroni"]]
-    recap["mean_abs_shap"]=np.round(mean_abs_specific,4)
-    recap["ROI"]=dict_atlas_roi_names[recap["ROI"].values]
-    print("p-values after bonferroni correction and mean abs shap values for specific ROI :\n", recap)
+    recap["mean_abs_shap"] = np.round(mean_abs_specific,4)
+
+    recap["ROI"] = recap['ROI'].replace(dict_atlas_roi_names)
+    save_pkl(recap, RESULTS_FEATIMPTCE_AND_STATS_DIR+"specific_ROI_SHAP_SVMRBF_VBM.pkl")
+
+    print("p-values after bonferroni correction and mean abs shap values for specific ROIs :\n", recap)
+
     # Illustrate Suppressor variable with linear model
 
         
@@ -408,11 +461,13 @@ STEP 7 : plot beeswarm plot of shap values in order of highest to lowest mean ab
 """
 
 def main():
+    plot_beeswarm()
+
+    plot_glassbrain()
     # path_univ_statistics = RESULTS_FEATIMPTCE_AND_STATS_DIR+"statsuniv_rois_res_age_sex_site.xlsx"
     # univ_statistics = pd.read_excel(path_univ_statistics)
     # print(univ_statistics[[univ_statistics["diag_pcor_bonferroni"] < 0.05]])
     # make_shap_df()
-    plot_beeswarm()
     # read_bootstrapped_shap(save=True,plot_and_save_jointplot=True, plot_and_save_kde_plot=False)
     
    

@@ -418,8 +418,9 @@ def regression_analysis_with_specific_and_suppressor_ROI(plot_and_save_jointplot
             text.set_fontsize(20)  
         g.ax_joint.tick_params(axis='both', labelsize=16)
         g.figure.suptitle("Scatter Plot with Marginal Densities", y=0.98, fontsize=22)
-        plt.show()
+        
         plt.savefig(RESULTS_FEATIMPTCE_AND_STATS_DIR + "plot_suppressor-specific_scatter_all_folds.pdf")  
+        plt.show()
         plt.close()
 
     if plot_and_save_kde_plot:
@@ -437,11 +438,9 @@ def regression_analysis_with_specific_and_suppressor_ROI(plot_and_save_jointplot
         for text in legend.get_texts():
             text.set_fontsize(20)  # Set font size of legend labels
         plt.grid(True)
-        plt.show()
         plt.title("Density Plot of Score with all both specific and suppressor ROI (AUC=%.2f)" % score_tot_auc)
-        #plt.grid(True)
-        #plt.show()
         plt.savefig(RESULTS_FEATIMPTCE_AND_STATS_DIR + "plot_suppressor-specific_density.pdf")  
+        plt.show()
         plt.close()
 
 
@@ -470,7 +469,7 @@ STEP 7 : plot beeswarm plot of shap values in order of highest to lowest mean ab
 """
 
 def main():
-    regression_analysis_with_specific_and_suppressor_ROI()
+    regression_analysis_with_specific_and_suppressor_ROI(True,True)
     quit()
     plot_beeswarm()
     plot_glassbrain()

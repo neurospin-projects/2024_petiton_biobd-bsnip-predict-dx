@@ -1,0 +1,34 @@
+ROI,diag_pcor_bonferroni,mean_abs_shap
+Left Pallidum,7.907418281921038e-09,0.0716
+Right Pallidum,6.911373425224158e-10,0.0448
+Left Anterior Insula,0.00179223384718023,0.0431
+Left Frontal Operculum,0.0006585962680254703,0.0418
+Right Fusiform Gyrus,0.0007988359402374821,0.0407
+Right Gyrus Rectus,0.009004219283038876,0.0395
+Right Inferior Occipital Gyrus,0.001490153883416844,0.0386
+Right Inferior Frontal Gyrus,0.001681656075411706,0.0351
+Right Superior Frontal Gyrus,0.003373495234783858,0.0319
+Right Cerebrum and Motor,0.03012867250194869,0.0317
+Right Superior Occipital Gyrus,5.524694072722974e-05,0.0299
+Left Third Ventricle,2.726453005963487e-07,0.0293
+Right Fourth Ventricle,0.0387454469765289,0.0278
+Right Thalamus Proper,5.134270742649924e-12,0.0259
+Left Anterior Insula,2.4053884787633e-19,0.0247
+Right Anterior Insula,8.95174724671125e-18,0.0242
+Right Calcarine and Cerebrum,4.334315940263772e-05,0.0233
+Left Central Operculum,3.376750165542861e-16,0.0231
+Left Frontal Operculum,2.281157539313726e-18,0.021
+Right Frontal Operculum,3.642150164846223e-17,0.0203
+Left Frontal Pole,1.016731325010689e-05,0.018
+Right Lingual Gyrus,0.0001129151935123671,0.018
+Left Middle Cingulate Gyrus,2.129679993756325e-10,0.0177
+Left Middle Frontal Gyrus,2.107529843159813e-11,0.0177
+Right Middle Frontal Gyrus,2.348628037270451e-10,0.0175
+Right Superior Medial Frontal Gyrus,2.570893691318295e-10,0.0168
+Left Posterior Insula,2.628871507717768e-17,0.0163
+Right Posterior Insula,3.988061691528732e-15,0.0163
+Left Planum Polare,2.269250841497051e-19,0.0156
+Right Planum Polare,7.13436323845371e-15,0.0155
+Left Superior Temporal Gyrus,1.400025449570096e-07,0.0142
+Left Temporal Transverse Gyrus,1.166292682018033e-14,0.0141
+Right Temporal Transverse Gyrus,1.385982617116387e-15,0.014

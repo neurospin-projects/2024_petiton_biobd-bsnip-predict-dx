@@ -272,7 +272,6 @@ def read_bootstrapped_shap(save=False):
 def plot_glassbrain(): 
     """
         Aim : plot glassbrain of specfic ROI from SHAP values obtained with an SVM-RBF and VBM ROI features
-    
     """
     specific_roi_df = read_pkl(RESULTS_FEATIMPTCE_AND_STATS_DIR+"specific_ROI_SHAP_SVMRBF_VBM.pkl")
     specific_ROI_dict = specific_roi_df.set_index('ROI')['mean_abs_shap'].to_dict()
@@ -335,9 +334,9 @@ def plot_beeswarm():
     mean_abs_specific = np.mean(np.abs(concatenated_shap_arrays_negatedCSF[:,sorted_indices_specificROI]),axis=0)
 
     # SHAP summary plot
-    # shap.summary_plot(concatenated_shap_arrays_negatedCSF[:,sorted_indices_specificROI], all_folds_Xtest_concatenated[:,sorted_indices_specificROI], \
-    #                   feature_names=[dict_atlas_roi_names[list_rois[i]] for i in sorted_indices_specificROI], max_display=len(sorted_indices_specificROI))
-
+    shap.summary_plot(concatenated_shap_arrays_negatedCSF[:,sorted_indices_specificROI], all_folds_Xtest_concatenated[:,sorted_indices_specificROI], \
+                      feature_names=[dict_atlas_roi_names[list_rois[i]] for i in sorted_indices_specificROI], max_display=len(sorted_indices_specificROI))
+    
     print("Sorted ROI (highest to lowest mean_abs):", [list_rois[i] for i in sorted_indices_specificROI])
     # get univariate statistics (obtained with univariate_stats.py)
     path_univ_statistics = RESULTS_FEATIMPTCE_AND_STATS_DIR+"statsuniv_rois_res_age_sex_site.xlsx"
@@ -353,87 +352,97 @@ def plot_beeswarm():
 
     # Illustrate Suppressor variable with linear model
 
-        
-#     data = get_scaled_data()
-#     data["response"] = data["y"].replace({"GR": 1, "PaR": 0, "NR": 0})
-#     print(data)
+def regression_analysis_with_specific_and_suppressor_ROI(plot_and_save_jointplot=False,plot_and_save_kde_plot=False):
+    #Illustrate Suppressor variable with linear model
+    data = get_scaled_data(res="res_age_sex_site")
+    print("data ", type(data), np.shape(data))
+    print(data)
+    specific_ROI={fold:[] for fold in get_predict_sites_list()}
+    suppressor_ROI={fold:[] for fold in get_predict_sites_list()}
 
-#     print("nb of specific ROI : ", len(list(shap_spec.ROI)), " nb of suppressor ROI : ",len(list(shap_suppr.ROI)))
-#     # 26 specific ROIs, 24 suppressor ROIs
-#     X = data[list(shap_spec.ROI) + list(shap_suppr.ROI)].values
-#     y = data.response
-#     scaler = StandardScaler()
-#     X_scaled = scaler.fit_transform(X)
+    for site in get_predict_sites_list():
+        shap_stat=pd.read_excel(RESULTS_FEATIMPTCE_AND_STATS_DIR+"shap_from_SVM_RBF_"+site+"-univstat.xlsx", sheet_name='SHAP_roi_univstat_'+site)
+        # print(shap_stat)
+        shap_spec = shap_stat[shap_stat.type=="specific"]
+        # print(shap_spec)
 
+        specific_ROI[site]=shap_stat[shap_stat["type"]=="specific"]["ROI"].values
+        suppressor_ROI[site]=shap_stat[shap_stat["type"]=="suppressor"]["ROI"].values
 
-#     lr = LogisticRegressionCV()
-#     lr.fit(X_scaled, y)
-#     assert lr.coef_.shape[1] == len(shap_spec.ROI) + len(shap_suppr.ROI) #lr.coef_ shape (1,83)
+    # get list of overall specific and suppressor ROI (ROIs with mean abs SHAP values that are within the CI for all LOSO-CV folds)
+    shared_strings_spec = list(get_shared_specific_or_suppressor_ROIs_btw_folds(specific_ROI))
+    shared_strings_supp = list(get_shared_specific_or_suppressor_ROIs_btw_folds(suppressor_ROI))
 
-#     coef_spec = lr.coef_[0, :len(shap_spec.ROI)] # coefficients of specific ROI
-#     coef_supr = lr.coef_[0, len(shap_spec.ROI):] # coefficients of supressor ROI
+    print("number of specific ROI ", len(shared_strings_spec), "number of suppressor ROI ", len(shared_strings_supp))
 
-#     # compute scores : linear combination of ROI with their respective weights
-#     score_spec = np.dot(X_scaled[:, :len(shap_spec.ROI)], coef_spec) 
-#     score_supr = np.dot(X_scaled[:, len(shap_spec.ROI):], coef_supr)
-#     score_tot = np.dot(X_scaled, lr.coef_[0, :]) # score tot being the score with both suppressor + specific ROIs, but not *all* ROIs
+    X = data[shared_strings_spec + shared_strings_supp]
+    print("X ", np.shape(X), type(X))
+    # rename dx values from 0 and 1 to HC and BD respectively
+    data.dx.replace({1:'BD', 0:'HC'}, inplace=True)
+    y = data.dx
 
-#     score_spec_auc = roc_auc_score(y, score_spec)
-#     score_supr_auc = roc_auc_score(y, score_supr)
-#     score_tot_auc = roc_auc_score(y, score_tot)
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
 
-#     df = pd.DataFrame(dict(response=data.y, score_spec=score_spec,
-#                         score_supr=score_supr, score_tot=score_tot))
+    lr = LogisticRegressionCV()
+    lr.fit(X_scaled, y)
+    assert lr.coef_.shape[1] == len(shared_strings_spec) + len(shared_strings_supp)
+
+    coef_spec = lr.coef_[0, :len(shared_strings_spec)] # coefficients of specific ROI
+    coef_supr = lr.coef_[0, len(shared_strings_spec):] # coefficients of specific ROI
+
+    # compute scores : linear combination of ROI with their respective weights
+    score_spec = np.dot(X_scaled[:, :len(shared_strings_spec)], coef_spec)
+    score_supr = np.dot(X_scaled[:, len(shared_strings_spec):], coef_supr)  
+    score_tot = np.dot(X_scaled, lr.coef_[0, :]) # score tot being the score with both suppressor + specific ROIs, but not all 280 ROIs
+
+    score_spec_auc = roc_auc_score(y, score_spec)
+    score_supr_auc = roc_auc_score(y, score_supr)
+    score_tot_auc = roc_auc_score(y, score_tot)
+
+    df = pd.DataFrame(dict(diagnosis=data.dx, score_spec=score_spec,
+                       score_supr=score_supr, score_tot=score_tot))
     
-#     ####### PRINT INFO ON OUTLIER SUBJECTS (defined as being 3 stds from the distribution mean) #############
-#     df_ROI_age_sex_site = pd.read_csv(ROOT+"df_ROI_age_sex_site_fevrier2025_M00_labels_as_strings.csv")
-#     df_outliers=df.copy()
-#     df_outliers["participant_id"]=df_ROI_age_sex_site["participant_id"]
-#     zscores = np.abs(zscore(df_outliers[["score_supr", "score_spec"]]))
-#     outliers = np.where(zscores > 3)
+    print(df)
+    
+    if plot_and_save_jointplot: 
+        # Create a joint plot with scatter and marginal density plots
+        plt.figure(figsize=(8, 8))
+        g = sns.jointplot(data=df, x="score_supr", y="score_spec", hue="diagnosis")
+        g.ax_joint.set_xlabel("Score with Suppressor Features (AUC=%.2f)" % score_supr_auc, fontsize = 20)
+        g.ax_joint.set_ylabel("Score with Speficic Features  (AUC=%.2f)" % score_spec_auc, fontsize = 20)
+        # Increase font size for legend title and labels and ticks
+        legend = g.ax_joint.legend_
+        legend.set_title("Diagnosis", prop={'size': 20})  
+        for text in legend.get_texts():
+            text.set_fontsize(20)  
+        g.ax_joint.tick_params(axis='both', labelsize=16)
+        g.figure.suptitle("Scatter Plot with Marginal Densities", y=0.98, fontsize=22)
+        plt.show()
+        plt.savefig(RESULTS_FEATIMPTCE_AND_STATS_DIR + "plot_suppressor-specific_scatter_all_folds.pdf")  
+        plt.close()
 
-#     outlier_indices = outliers[0]
-#     df_outliers = df_outliers.iloc[outlier_indices]
-#     print("outliers:\n",df_outliers,"\n")
-#     #########################################################################################################
-
-
-#     if plot_and_save_jointplot: 
-#         # Create a joint plot with scatter and marginal density plots
-#         plt.figure(figsize=(8, 8))
-#         g = sns.jointplot(data=df, x="score_supr", y="score_spec", hue="response")
-#         g.ax_joint.set_xlabel("Score with Suppressor Features (AUC=%.2f)" % score_supr_auc, fontsize = 20)
-#         g.ax_joint.set_ylabel("Score with Speficic Features  (AUC=%.2f)" % score_spec_auc, fontsize = 20)
-
-#         # Increase font size for legend title and labels and ticks
-#         legend = g.ax_joint.legend_
-#         legend.set_title("Response", prop={'size': 20})  
-#         for text in legend.get_texts():
-#             text.set_fontsize(20)  
-#         g.ax_joint.tick_params(axis='both', labelsize=16)
-
-#         g.figure.suptitle("Scatter Plot with Marginal Densities", y=0.98, fontsize=22)
-#         plt.show()
-#         plt.savefig(RESULTS_FEATIMPTCE_DIR + "plot_suppressor-specific_scatter_bootstrap"+str(nb_samplings)+"_without_multiple_comp_corr.pdf")  
-
-#     if plot_and_save_kde_plot:
-#         # Density (KDE) Plot
-#         plt.figure(figsize=(6, 2))
-#         g = sns.kdeplot(data=df, x='score_tot', hue='response', fill=True, alpha=0.3)
-#         g.set_xlabel("Density Plot of Score with all Features (AUC=%.2f)" % score_tot_auc, fontsize=20)
-#         g.set_ylabel("")
-#         # Increase x and y tick size
-#         plt.xticks(fontsize=16)
-#         plt.yticks(fontsize=16)
-#         # Increase legend font size
-#         legend = g.legend_
-#         legend.set_title("Response", prop={'size': 20})  # Set legend title font size
-#         for text in legend.get_texts():
-#             text.set_fontsize(20)  # Set font size of legend labels
-#         plt.grid(True)
-#         plt.show()
-#         plt.savefig(RESULTS_FEATIMPTCE_DIR + "plot_suppressor-specific_density_bootstrap"+str(nb_samplings)+"_without_multiple_comp_corr.pdf")  
-
+    if plot_and_save_kde_plot:
+        # Density (KDE) Plot
+        plt.figure(figsize=(6, 2))
+        g = sns.kdeplot(data=df, x='score_tot', hue='diagnosis', fill=True, alpha=0.3)
+        g.set_xlabel("Density Plot of Score with specific and suppressor features (AUC=%.2f)" % score_tot_auc, fontsize=20)
+        g.set_ylabel("")
+        # Increase x and y tick size
+        plt.xticks(fontsize=16)
+        plt.yticks(fontsize=16)
+        # Increase legend font size
+        legend = g.legend_
+        legend.set_title("Diagnosis", prop={'size': 20})  # Set legend title font size
+        for text in legend.get_texts():
+            text.set_fontsize(20)  # Set font size of legend labels
+        plt.grid(True)
+        plt.show()
+        plt.title("Density Plot of Score with all both specific and suppressor ROI (AUC=%.2f)" % score_tot_auc)
+        #plt.grid(True)
+        #plt.show()
+        plt.savefig(RESULTS_FEATIMPTCE_AND_STATS_DIR + "plot_suppressor-specific_density.pdf")  
+        plt.close()
 
 
 """
@@ -461,12 +470,11 @@ STEP 7 : plot beeswarm plot of shap values in order of highest to lowest mean ab
 """
 
 def main():
+    regression_analysis_with_specific_and_suppressor_ROI()
+    quit()
     plot_beeswarm()
-
     plot_glassbrain()
-    # path_univ_statistics = RESULTS_FEATIMPTCE_AND_STATS_DIR+"statsuniv_rois_res_age_sex_site.xlsx"
-    # univ_statistics = pd.read_excel(path_univ_statistics)
-    # print(univ_statistics[[univ_statistics["diag_pcor_bonferroni"] < 0.05]])
+
     # make_shap_df()
     # read_bootstrapped_shap(save=True,plot_and_save_jointplot=True, plot_and_save_kde_plot=False)
     

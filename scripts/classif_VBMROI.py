@@ -3,15 +3,19 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import roc_auc_score, balanced_accuracy_score
 from tqdm import tqdm
 from utils import save_pkl, get_participants, get_predict_sites_list, get_classifier,\
-        get_LOSO_CV_splits_N861, get_LOSO_CV_splits_N763, get_scores, create_folder_if_not_exists
+        get_LOSO_CV_splits_N861, get_LOSO_CV_splits_N763, get_scores, create_folder_if_not_exists, save_shap_file
 
 import time
 sys.path.append('/neurospin/psy_sbox/temp_sara/')
 from pylearn_mulm.mulm.residualizer import Residualizer
 
-RESULTSFOLDER="/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/results_classif/"
-DATAFOLDER="/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/data/processed/"
-SHAP_DIR="/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/models/ShapValues/shap_computed_from_all_Xtrain/"
+#inputs
+ROOT="/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/"
+DATAFOLDER=ROOT+"data/processed/"
+
+#outouts
+RESULTSFOLDER=ROOT+"results_classif/"
+SHAP_DIR=ROOT+"models/ShapValues/shap_computed_from_all_Xtrain/"
 
 def standard_error(data):
     return np.std(data, ddof=1) / np.sqrt(len(data))
@@ -24,18 +28,6 @@ def remove_zeros(df, verbose=False):
     assert set(columns_with_only_zeros) <= {'lInfLatVen_GM_Vol', 'lOC_GM_Vol', 'lInfLatVen_CSF_Vol', 'lOC_CSF_Vol'}
     df = df.drop(columns=columns_with_only_zeros)
     return df
-
-def save_shap_file(shap_values, shapfile):
-    for i in range(30):  # 0 (no suffix) to 30
-        suffix = "" if i == 0 else f"_run{i}"
-        file_name = f"{shapfile}{suffix}.pkl"
-
-        if not os.path.exists(file_name):
-            save_pkl(shap_values, file_name)
-            print(f"Saved: {file_name}")
-            return  # Stop once we save a file
-
-    print("All 30 versions already exist, not saving.")
 
 
 
@@ -119,7 +111,9 @@ def classif_vbm_ROI(classif='svm', datasize=800, save = False, N763=False, compu
         
         assert list(y_train)==list(participants_VBM.iloc[train]["dx"].values)
         assert list(y_test)==list(participants_VBM.iloc[test]["dx"].values)
-        
+        participants_te = df_te_["participant_id"].values
+        participants_tr = df_tr_["participant_id"].values
+
         # drop participant_ids , sessions, and global measures 
         # (TIV, total cerebrosplinal fluid, gray matter, and white matter volumes)
         exclude_elements = ['participant_id', 'session', 'TIV', 'CSF_Vol', 'GM_Vol', 'WM_Vol']
@@ -135,6 +129,7 @@ def classif_vbm_ROI(classif='svm', datasize=800, save = False, N763=False, compu
       
         df_tr_ = remove_zeros(df_tr_)
         df_te_ = remove_zeros(df_te_) 
+        
 
         # df_te_= df_te_[["rPal_GM_Vol","lPal_GM_Vol"]] #[["lPut_GM_Vol","rPut_GM_Vol",
         # df_tr_= df_tr_[["rPal_GM_Vol","lPal_GM_Vol"]]
@@ -177,7 +172,7 @@ def classif_vbm_ROI(classif='svm', datasize=800, save = False, N763=False, compu
             background_data = X_train 
             print("background data shape (X train)", np.shape(background_data))
 
-            explainer = shap.KernelExplainer(classifier.decision_function, background_data)
+            explainer = shap.KernelExplainer(classifier.best_estimator_.decision_function, background_data)
             shap_values = joblib.Parallel(n_jobs=5)(
                 joblib.delayed(explainer)(x) for x in tqdm(X_test)
             )
@@ -193,7 +188,8 @@ def classif_vbm_ROI(classif='svm', datasize=800, save = False, N763=False, compu
             print("shape and type shap values : ",type(shap_values), np.shape(shap_values))
 
         
-        dict_score_by_site[site] = {"score test": score_test,"score train": score_train}
+        dict_score_by_site[site] = {"score test": score_test,"score train": score_train, \
+                                    "participant_ids_te":participants_te, "participant_ids_tr":participants_tr}
 
         roc_auc = roc_auc_score(y_test, score_test)
         bacc = balanced_accuracy_score(y_test, y_pred)
@@ -214,19 +210,20 @@ def classif_vbm_ROI(classif='svm', datasize=800, save = False, N763=False, compu
     if save and classif=="svm" and not N763 and not random_labels and onesite is None:
         create_folder_if_not_exists(RESULTSFOLDER+"/stacking")
         create_folder_if_not_exists(RESULTSFOLDER+"/stacking/SVMRBF_VBMROI")
-        scores_filepath = RESULTSFOLDER+"/stacking/SVMRBF_VBMROI/scores_tr_te_N861.pkl"
+        scores_filepath = RESULTSFOLDER+"stacking/SVMRBF_VBMROI/scores_tr_te_N861_train_size_N"+str(datasize)+".pkl"
+        print(scores_filepath)
         if not os.path.exists(scores_filepath):
             print("saving scores for stacking ...")
-            save_pkl(dict_score_by_site,scores_filepath)
+            save_pkl(dict_score_by_site, scores_filepath)
     
-    if save and not random_labels and onesite is None:
-        quit()
-        if N763: strN = '_N763'
-        else: strN = '_N861'
-        create_folder_if_not_exists(RESULTSFOLDER+"classifVBM/")
-        results_file = RESULTSFOLDER+"classifVBM/"+classif+"_N"+str(datasize)+"_"+atlas+"_VBM_ROI"+strN+".pkl"
-        print("\nsaving classification results ...")
-        save_pkl(metrics_dict, results_file)
+    # if save and not random_labels and onesite is None:
+    #     quit()
+    #     if N763: strN = '_N763'
+    #     else: strN = '_N861'
+    #     create_folder_if_not_exists(RESULTSFOLDER+"classifVBM/")
+    #     results_file = RESULTSFOLDER+"classifVBM/"+classif+"_N"+str(datasize)+"_"+atlas+"_VBM_ROI"+strN+".pkl"
+    #     print("\nsaving classification results ...")
+    #     save_pkl(metrics_dict, results_file)
 
     return dict_score_by_site
 
@@ -264,13 +261,15 @@ def print_info_participants():
 
 
 def main():
+    """
     # to compute shap values at maximum training set size with the dataset containing the most subjects (N=861)
     # for the best-performing classifier using VBM ROI features (SVM-RBF)
-    onesite_="Hartford" #"Dallas", "Detroit", "Hartford", "mannheim", "creteil", "udine", "galway", "pittsburgh", "grenoble", "geneve"]
+    # onesite_ to choose from ["Baltimore", "Boston", "Dallas", "Detroit", "Hartford",
+    #  "mannheim", "creteil", "udine", "galway", "pittsburgh", "grenoble", "geneve"]
     for i in range(30):
         start_time = time.time()
         print(onesite_)
-        classif_vbm_ROI(classif = "svm", datasize = 800, save = False, N763=False, compute_shap=True, random_labels=True, onesite=onesite_) 
+        classif_vbm_ROI(classif = "svm", datasize = 800, save = False, N763=False, compute_shap=True, random_labels=False, onesite=onesite_) 
         end_time = time.time()
         elapsed_time = end_time - start_time
         hours = int(elapsed_time // 3600)
@@ -278,19 +277,16 @@ def main():
         seconds = int(elapsed_time % 60)
         print("site : ",onesite_)
         print(f"The function took {hours}h {minutes}m {seconds}s to run.") 
-
-        
-
-
-    
+    """
+    classif_vbm_ROI(classif = "svm", datasize = 800, save = True, N763=False) 
     quit()
-
     # to compute the classificaitons for all ML models and all training set sizes :
 
     # for the dataset with all VBM ROI measures and all subjects (N=861)
     for size in [100,175,250,350,400,500,600,700,800] :
-        for classifier in ["svm", "MLP", "EN", "L2LR", "xgboost"]: 
-            classif_vbm_ROI(classif = classifier, datasize = size, save = False, N763=False)
+        for classifier in ["svm"]:#, "MLP", "EN", "L2LR", "xgboost"]: 
+            classif_vbm_ROI(classif = classifier, datasize = size, save = True, N763=False)
+    quit()
 
     # for the dataset with subjects that have both measures for SBM ROI and VBM ROI (N=763)
     for size in [75, 150, 200, 300, 400, 450, 500, 600, 700]:

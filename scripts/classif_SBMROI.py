@@ -1,18 +1,22 @@
 import os , pandas as pd, numpy as np, json, gc, sys
-import pickle, shap
+import pickle, shap, joblib, time
 from sklearn.preprocessing import StandardScaler
+from tqdm import tqdm
 from sklearn.metrics import roc_auc_score, balanced_accuracy_score
 import pandas as pd
 from utils import standard_error, save_pkl, read_pkl, \
     get_participants, get_predict_sites_list, has_nan, has_zeros_col, get_classifier,\
-        get_LOSO_CV_splits_N763, get_scores, create_folder_if_not_exists, get_LOSO_CV_splits_N861
+        get_LOSO_CV_splits_N763, get_scores, create_folder_if_not_exists, get_LOSO_CV_splits_N861, save_shap_file
 
 sys.path.append('/neurospin/psy_sbox/temp_sara/')
 from pylearn_mulm.mulm.residualizer import Residualizer
 
+#inputs
 ROOT="/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/"
-RESULTSFOLDER=ROOT+"results_classif/classifSBM/"
 DATAFOLDER=ROOT+"data/processed/"
+#outputs
+RESULTSFOLDER=ROOT+"results_classif/classifSBM/"
+SHAP_DIR=ROOT+"models/ShapValues/shap_computed_from_all_Xtrain/"
 
 def get_N861(SBMdf):
     splits = get_LOSO_CV_splits_N861()    
@@ -70,8 +74,8 @@ def get_N861(SBMdf):
 
     return SBMdf_861, participants_VBM, splits
 
-def run(classif, datasize, save=False, compute_shap=False, atlas="Desikan", include_subcorticalROI=True,\
-        seven_subcortical_Nunes_replicate=False, classif_augmented_SBMROI=False):
+def classif_sbm_ROI(classif, datasize, save=False, compute_shap=False, atlas="Destrieux", include_subcorticalROI=True,\
+        seven_subcortical_Nunes_replicate=False, classif_augmented_SBMROI=False, random_labels=False, onesite=None):
     """
         classif : (str) classifier name (it has to be "MLP","L2LR","svm","xgboost", or "EN")
         datasize : (int) has to be 75, 150, 200, 300, 400, 450, 500, 600, or 700
@@ -81,6 +85,9 @@ def run(classif, datasize, save=False, compute_shap=False, atlas="Desikan", incl
         atlas : (str) "Destrieux" or "Desikan", the atlas name used to generate SBM ROI 
         include_subcortical : (bool), whether we inlcude all subcortical measures to the SBM ROI for classification 
                 the alternative is having only cortical thickness and surface area measures. 
+        random_labels : (bool) use random labels for training and testing to compute shap with random labels
+        onesite : (None or str) to compute Shap one site at a time (onesite is the name of said site) to compute shap 
+                for each site in parallel if needed
         classif_augmented_SBMROI : (bool) use SBM ROI with data imputation (only for stacking for the meta-model)
     """
 
@@ -91,6 +98,11 @@ def run(classif, datasize, save=False, compute_shap=False, atlas="Desikan", incl
         not seven_subcortical_Nunes_replicate, "not the right parameters for SBM ROI classification for stacking"
     if classif_augmented_SBMROI: assert datasize in [100,175,250,350,400,500,600,700,800],"wrong training dataset size!"
     else: assert datasize in [75, 150, 200, 300, 400, 450, 500, 600, 700],"wrong training dataset size!"
+
+    #verifications for shap computations
+    if onesite is not None: assert onesite in get_predict_sites_list()
+    if random_labels: randomizedlabels_str="_randomized_labels"
+    else: randomizedlabels_str=""
 
     # read splits
     splits = get_LOSO_CV_splits_N763()
@@ -126,19 +138,23 @@ def run(classif, datasize, save=False, compute_shap=False, atlas="Desikan", incl
     SBMdf = SBMdf.set_index('participant_id').reindex(participants_SBM["participant_id"].values).reset_index()
 
     if classif_augmented_SBMROI: SBMdf, participants_SBM, splits = get_N861(SBMdf)
+
+    if onesite is not None: list_sites = [onesite]
+    else : list_sites = get_predict_sites_list()
    
-    for site in get_predict_sites_list(): 
+    for site in list_sites: 
         print("running site : ",site)
     
         # get training and testing ROI dataframes (contains participant_id + TIV in addition to 330 ROIs)
         df_tr_ = SBMdf[SBMdf["participant_id"].isin(splits[site+"-"+str(datasize)][0])]
         df_te_ = SBMdf[SBMdf["participant_id"].isin(splits[site+"-"+str(datasize)][1])]
-        print(SBMdf)
-        print(df_tr_["dx"])
-        print(participants_SBM["dx"])
-        print(pd.merge(df_tr_, participants_SBM, on ="participant_id"))
-        quit()
-        
+
+        if random_labels and compute_shap: 
+            print("permuting the labels ...")
+            y = participants_SBM["dx"].values
+            y = np.random.permutation(y)
+            participants_SBM["dx"]=y
+                
         y_train = pd.merge(df_tr_, participants_SBM, on ="participant_id")["dx"].values
         y_test = pd.merge(df_te_, participants_SBM, on ="participant_id")["dx"].values
         
@@ -148,6 +164,8 @@ def run(classif, datasize, save=False, compute_shap=False, atlas="Desikan", incl
         
         assert list(y_train)==list(participants_SBM.iloc[train]["dx"].values)
         assert list(y_test)==list(participants_SBM.iloc[test]["dx"].values)
+        participants_te = df_te_["participant_id"].values
+        participants_tr = df_tr_["participant_id"].values
 
         # drop participant_ids and TIV measures
         df_tr_ = df_tr_.drop(columns=["participant_id", "TIV"])
@@ -167,10 +185,9 @@ def run(classif, datasize, save=False, compute_shap=False, atlas="Desikan", incl
             X_train = df_tr_[roi_names].values
             X_test = df_te_[roi_names].values
         
-        print("shape train: ",np.shape(X_train), ", test: ", np.shape(X_test))
-        print("type train: ",type(X_train), ", test: ", type(X_test))
-        print("roi_names : ", np.shape(roi_names), type(roi_names), " len ", len(roi_names))
-        quit()
+        # print("shape train: ",np.shape(X_train), ", test: ", np.shape(X_test))
+        # print("type train: ",type(X_train), ", test: ", type(X_test))
+        # print("roi_names : ", np.shape(roi_names), type(roi_names), " len ", len(roi_names))
 
         assert not has_nan(X_train) and not has_nan(X_test)
         if has_zeros_col(X_test) : 
@@ -219,16 +236,29 @@ def run(classif, datasize, save=False, compute_shap=False, atlas="Desikan", incl
         if compute_shap :
             assert datasize==700, "shap values should be computed only at maximum training set size!"
             assert classif=="EN", "shap values should be computed with the elastic net as it is the classifier that performs best for Freesurfer ROI data"
+            print("SHAP step : predict proba")
+            # here, we can compute shap values different ways:
+            # ideally, we take the whole training dataset as background data to estimate the shap values
+            # for a non-linear model like the SVM-RBF, which means setting background_data = X_train 
+            # otherwise, for computational efficiency (using the whole training data is time consuming),
+            # we can use a subset of the training data, either using kmeans clustering 
+            # (weighted by the nb of subjects in each cluster), which we can do with 
+            # background_data = shap.kmeans(X_train, 100), or we can subsample randomly from Xtrain without replacement 
+            # with: X_train[np.random.choice(X_train.shape[0], 100, replace=False)]
             
-            best_model = classifier.best_estimator_
-            print(best_model)
-            explainer = shap.Explainer(best_model, X_train)
+            background_data = X_train 
+            print("background data shape (X train)", np.shape(background_data))
+            explainer = shap.Explainer(classifier.best_estimator_, background_data)
             shap_values = explainer.shap_values(X_test)
-            print(np.shape(shap_values), type(shap_values))
-            create_folder_if_not_exists(RESULTSFOLDER+"shap")
-            
-            save_pkl(shap_values,RESULTSFOLDER+"shap/ShapValues_SBM_ROI_"+classif+"_"+site+"_"+atlas+".pkl")
-            # if showplot : shap.summary_plot(shap_values, X_test, feature_names=list(df_te_.columns))
+
+            # if you do not wish to parallelize the computations (not necessary if the background_data is not the
+            # whole training set), do : shap_values = explainer.shap_values(X_test)
+            create_folder_if_not_exists(SHAP_DIR)
+            shapfile = SHAP_DIR+"ShapValues_VBM_SVM_RBF_"+site+"_background_alltr_parallelized"+randomizedlabels_str+"_"+atlas
+
+            save_shap_file(shap_values, shapfile)
+            print("shape and type shap values : ",type(shap_values), np.shape(shap_values))
+
                 
         roc_auc = roc_auc_score(y_test, score_test)
         bacc = balanced_accuracy_score(y_test, y_pred)
@@ -237,10 +267,16 @@ def run(classif, datasize, save=False, compute_shap=False, atlas="Desikan", incl
         scores_list.append(score_test)
         Xim_test_all_sites.append(X_test)
         bacc_list.append(bacc)
-        print("site : ",site," roc auc ", round(roc_auc,3), " bacc", round(bacc,3))
         print("...done.")
         metrics_dict[site] = {"roc_auc": roc_auc, "balanced-accuracy":bacc}
-        dict_score_by_site[site] = {"score test": score_test,"score train": score_train}
+        dict_score_by_site[site] = {"score test": score_test,"score train": score_train, \
+                                    "participant_ids_te":participants_te, "participant_ids_tr":participants_tr}
+        print(site, " roc auc ", round(100*roc_auc,2), " bacc ", round(100*bacc,2))
+    
+    if onesite is not None :
+        metrics_dict["mean over all sites"] = {"roc_auc": np.mean(roc_auc_list), "balanced-accuracy":np.mean(bacc_list)}
+        print("MEAN : roc_auc ", np.round(100*np.mean(roc_auc_list),2), "balanced-accuracy ",np.round(100*np.mean(bacc_list),2))
+        print("STD : roc_auc ", np.round(100*np.std(roc_auc_list),2), "balanced-accuracy ",np.round(100*np.std(bacc_list),2))
 
     print("\n",classif , "roc auc mean % :", round(100*np.mean(roc_auc_list,axis=0),2))
     print("bacc mean % :", round(100*np.mean(bacc_list,axis=0),2))
@@ -269,11 +305,11 @@ def run(classif, datasize, save=False, compute_shap=False, atlas="Desikan", incl
     if classif=="EN" and atlas=="Destrieux" and include_subcorticalROI and \
         not seven_subcortical_Nunes_replicate :
         create_folder_if_not_exists(RESULTSFOLDER+"/stacking")
-        create_folder_if_not_exists(RESULTSFOLDER+"/stacking/SVMRBF_VBMROI")
-        scores_filepath = RESULTSFOLDER+"/stacking/SVMRBF_VBMROI/scores_tr_te_N861.pkl"
+        create_folder_if_not_exists(RESULTSFOLDER+"/stacking/EN_SBMROI")
+        scores_filepath = RESULTSFOLDER+"/stacking/EN_SBMROI/scores_tr_te_N763_train_size_N"+str(datasize)+".pkl"
         if not os.path.exists(scores_filepath):
             print("saving scores for stacking ...")
-            save_pkl(dict_score_by_site,scores_filepath)
+            save_pkl(dict_score_by_site, scores_filepath)
     
     if save:
         print("\nsaving classification results ...")
@@ -344,24 +380,46 @@ def read_results_classif(datasize=700, atlas="Destrieux"):
 
 
 def main():
+    
+    # to compute shap values at maximum training set size with the dataset containing the most subjects (N=861)
+    # for the best-performing classifier using VBM ROI features (SVM-RBF)
+    # onesite_ to choose from ["Baltimore", "Boston", "Dallas", "Detroit", "Hartford",
+    #  "mannheim", "creteil", "udine", "galway", "pittsburgh", "grenoble", "geneve"]
+    start_time = time.time()
+    for onesite_ in get_predict_sites_list():
+        for i in range(30):
+            
+            print(onesite_)
+            classif_sbm_ROI(classif = "EN", datasize = 700, save = False, compute_shap=True, random_labels=False, onesite=onesite_) 
+            classif_sbm_ROI(classif = "EN", datasize = 700, save = False, compute_shap=True, random_labels=True, onesite=onesite_) 
+            
+            print("site : ",onesite_)
+
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    hours = int(elapsed_time // 3600)
+    minutes = int((elapsed_time % 3600) // 60)
+    seconds = int(elapsed_time % 60)
+    print(f"The function took {hours}h {minutes}m {seconds}s to run.") 
+    quit()
     """
     # to print demographic information on BIOBD/BSNIP subjects with SBM ROI (N=763)
     print_info_participants()
 
     # to run the classification with the best-performing classifier (EN) and maximum training set size : 
-    run("EN",700, atlas="Destrieux", include_subcorticalROI=True, compute_shap=True, save=False)
+    classif_sbm_ROI("EN",700, atlas="Destrieux", include_subcorticalROI=True, compute_shap=True, save=False)
     """
-    run("EN", 800, atlas="Destrieux", include_subcorticalROI=True, classif_augmented_SBMROI=True)
+    classif_sbm_ROI("EN", 800, atlas="Destrieux", include_subcorticalROI=True, classif_augmented_SBMROI=True)
 
     for size in [100,175,250,350,400,500,600,700,800]:
-        run("EN", size, atlas="Destrieux", include_subcorticalROI=True, classif_augmented_SBMROI=True)
+        classif_sbm_ROI("EN", size, atlas="Destrieux", include_subcorticalROI=True, classif_augmented_SBMROI=True)
     quit()
     # to run classification for all training set sizes and all 5 ML classifiers for Destrieux atlas with subcortical ROI
     for atlas in ["Destrieux"]:
         for include_subcorticalROI in [True]:
             for classif_ in ["L2LR", "EN","svm","xgboost", "MLP"]: 
                 for trainingdatasize in  [75, 150, 200, 300, 400, 450, 500, 600, 700]:
-                    run(classif_, trainingdatasize, atlas=atlas, include_subcorticalROI=include_subcorticalROI, seven_subcortical_Nunes_replicate=True, save=True)
+                    classif_sbm_ROI(classif_, trainingdatasize, atlas=atlas, include_subcorticalROI=include_subcorticalROI, seven_subcortical_Nunes_replicate=True, save=True)
     """
     # to print the results of classification for different training set sizes
     for trainingdatasize in [75, 150, 200, 300, 400, 450, 500, 600, 700]:

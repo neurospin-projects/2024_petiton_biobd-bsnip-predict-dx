@@ -17,14 +17,18 @@ from univariate_stats import get_scaled_data
 from sklearn.linear_model import LogisticRegressionCV
 from classif_VBMROI import remove_zeros 
 
+# inputs
 ROOT = "/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/"
-SHAP_DIR_SVMRBF=ROOT+"/models/ShapValues/shap_computed_from_all_Xtrain/"
+SHAP_DIR_SVMRBF=ROOT+"models/ShapValues/shap_computed_from_all_Xtrain/"
 DATAFOLDER=ROOT+"data/processed/"
-RESULTS_FEATIMPTCE_AND_STATS_DIR=ROOT+"results_feat_imptce_and_univ_stats/"
 VOL_FILE_VBM = "/drf/local/spm12/tpm/labels_Neuromorphometrics.nii"
 VBMLOOKUP_FILE = "/drf/local/spm12/tpm/labels_Neuromorphometrics.xml"
 
-def make_shap_df(verbose=False):
+# outputs
+RESULTS_FEATIMPTCE_AND_STATS_DIR=ROOT+"results_feat_imptce_and_univ_stats/"
+
+
+def make_shap_df(verbose=False, VBM=True, SBM=False):
     # SHAP only computed for VBM ROI and age+sex+site residualization
 
     VBMdf = pd.read_csv(DATAFOLDER+"VBMROI_Neuromorphometrics.csv")
@@ -39,15 +43,16 @@ def make_shap_df(verbose=False):
     df_all_shap = pd.DataFrame(columns=['fold', 'ROI', 'mean_abs_shap','shap_array', 'mean_abs_shap_rdm','shap_array_rdm'])
 
     shap_all, shap_all_rdm = [], []
+    if VBM: str_VBM = "VBM_SVM_RBF"
 
     for site in get_predict_sites_list():
         print(site)
         
-        shap_path = SHAP_DIR_SVMRBF + "ShapValues_VBM_SVM_RBF_"+site+"_background_alltr_parallelized.pkl"
+        shap_path = SHAP_DIR_SVMRBF + "ShapValues_"+str_VBM+"_"+site+"_background_alltr_parallelized_run1.pkl"
         all_runs_shap_rdm = []
 
         for run in range(1, 31): # from 1 to 30 included
-            shap_path_rdm = SHAP_DIR_SVMRBF + "ShapValues_VBM_SVM_RBF_"+site+"_background_alltr_parallelized_randomized_labels_run"+str(run)+".pkl"
+            shap_path_rdm = SHAP_DIR_SVMRBF + "ShapValues_"+str_VBM+"_"+site+"_background_alltr_parallelized_randomized_labels_run"+str(run)+".pkl"
             shap_rdm = read_pkl(shap_path_rdm)
             shap_rdm = np.array([exp.values for exp in shap_rdm])
             shap_rdm = np.delete(shap_rdm, columns_with_zeros_indices, axis=1)
@@ -97,7 +102,8 @@ def make_shap_df(verbose=False):
     df_all_shap["abs_mean_shap_by_roi"] = df_all_shap["ROI"].map(dict_means_by_roi)
     df_all_shap["abs_mean_shap_by_roi_rdm"] = df_all_shap["ROI"].map(dict_means_by_roi_rdm)
     print(df_all_shap)
-    df_all_shap.to_excel(SHAP_DIR_SVMRBF+'SHAP_summary_including_shap_from_30rdm_runs.xlsx', index=False)
+    if VBM: df_all_shap.to_excel(SHAP_DIR_SVMRBF+'SHAP_summary_including_shap_from_30rdm_runs_VBM_ROI_avril25.xlsx', index=False)
+    if SBM: df_all_shap.to_excel(SHAP_DIR_SVMRBF+'SHAP_summary_including_shap_from_30rdm_runs_SBM_ROI_avril25.xlsx', index=False)
 
     return df_all_shap
 
@@ -316,7 +322,6 @@ def plot_glassbrain():
         title="glassbrain of specific ROI")
     plotting.show()
 
-
 def plot_beeswarm():
     """
         Aim: printing the mean absolute shap values and their feature's values for all shap values of all 861 test subjects 
@@ -444,10 +449,16 @@ def regression_analysis_with_specific_and_suppressor_ROI(plot_and_save_jointplot
         plt.close()
 
 
+def forward_maps_VBMROI():
+    scores_path = ROOT+"results_classif/classifVBM/svm_N800_Neuromorphometrics_VBM_ROI_N861.pkl"
+    scores = read_pkl(scores_path)
+    print(scores)
+
 """
 SVM-RBF SHAP VALUES ANALYSIS
-after having computed the SHAP values with LOSO-CV folds, as well as 30 times with permuted labels, start analysing the SHAP values and their 
-statistical significance : 
+after having computed the SHAP values with LOSO-CV folds in classif_VBMROI.py or classif_SBMROI.py (for VBM ROI or SBM ROI features, respectively),
+ and after having computed the SHAP values with LOSO-CV folds 30 times with permuted labels, we can start analyzing 
+ the statistical significance of each feature of importance : 
 
 STEP 1 : analysis of shap values obtained in steps 1 and 2 with confidence intervals thanks to the random permutation estimates 
         read_bootstrapped_shap()
@@ -469,7 +480,11 @@ STEP 7 : plot beeswarm plot of shap values in order of highest to lowest mean ab
 """
 
 def main():
-    regression_analysis_with_specific_and_suppressor_ROI(True,True)
+    make_shap_df()
+    # forward_maps_VBMROI()
+    quit()
+
+    regression_analysis_with_specific_and_suppressor_ROI(plot_and_save_jointplot=True)
     quit()
     plot_beeswarm()
     plot_glassbrain()

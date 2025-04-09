@@ -120,17 +120,14 @@ def classif_vbm_ROI(classif='svm', datasize=800, save = False, N763=False, compu
         df_tr_ = df_tr_.drop(columns=exclude_elements)
         df_te_ = df_te_.drop(columns=exclude_elements)
 
+        df_tr_ = remove_zeros(df_tr_)
+        df_te_ = remove_zeros(df_te_) 
+
         X_train = df_tr_.values
         X_test = df_te_.values
 
-        # get ROI names in a list
         assert list(df_tr_.columns) == list(df_te_.columns)
-        roi_names = list(df_te_.columns)
-      
-        df_tr_ = remove_zeros(df_tr_)
-        df_te_ = remove_zeros(df_te_) 
         
-
         # df_te_= df_te_[["rPal_GM_Vol","lPal_GM_Vol"]] #[["lPut_GM_Vol","rPut_GM_Vol",
         # df_tr_= df_tr_[["rPal_GM_Vol","lPal_GM_Vol"]]
 
@@ -180,7 +177,7 @@ def classif_vbm_ROI(classif='svm', datasize=800, save = False, N763=False, compu
             # if you do not wish to parallelize the computations (not necessary if the background_data is not the
             # whole training set), do : shap_values = explainer.shap_values(X_test)
             create_folder_if_not_exists(SHAP_DIR)
-            shapfile = SHAP_DIR+"ShapValues_VBM_SVM_RBF_"+site+"_background_alltr_parallelized"+randomizedlabels_str
+            shapfile = SHAP_DIR+"ShapValues_VBM_SVM_RBF_"+site+"_background_alltr_parallelized"+randomizedlabels_str+"_avril25"
 
             save_shap_file(shap_values, shapfile)
 
@@ -261,15 +258,18 @@ def print_info_participants():
 
 
 def main():
-    """
+    
     # to compute shap values at maximum training set size with the dataset containing the most subjects (N=861)
     # for the best-performing classifier using VBM ROI features (SVM-RBF)
     # onesite_ to choose from ["Baltimore", "Boston", "Dallas", "Detroit", "Hartford",
     #  "mannheim", "creteil", "udine", "galway", "pittsburgh", "grenoble", "geneve"]
-    for i in range(30):
+    onesite_ = "grenoble"
+    classif_vbm_ROI(classif = "svm", datasize = 800, save = False, N763=False, compute_shap=True, random_labels=False, onesite=onesite_) 
+    quit()
+    for i in range(5):
         start_time = time.time()
         print(onesite_)
-        classif_vbm_ROI(classif = "svm", datasize = 800, save = False, N763=False, compute_shap=True, random_labels=False, onesite=onesite_) 
+        classif_vbm_ROI(classif = "svm", datasize = 800, save = False, N763=False, compute_shap=True, random_labels=True, onesite=onesite_) 
         end_time = time.time()
         elapsed_time = end_time - start_time
         hours = int(elapsed_time // 3600)
@@ -277,7 +277,7 @@ def main():
         seconds = int(elapsed_time % 60)
         print("site : ",onesite_)
         print(f"The function took {hours}h {minutes}m {seconds}s to run.") 
-    """
+    quit()
     classif_vbm_ROI(classif = "svm", datasize = 800, save = True, N763=False) 
     quit()
     # to compute the classificaitons for all ML models and all training set sizes :

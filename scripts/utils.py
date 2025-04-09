@@ -100,3 +100,56 @@ def has_zeros_col(arr):
     # if there are columns with only values equal to zero in the array
     zero_columns = np.all(arr == 0, axis=0)
     return np.any(zero_columns)
+
+def save_shap_file(shap_values, shapfile):
+    for i in range(30):  # 0 (no suffix) to 30
+        suffix = f"_run{i+1}"
+        file_name = f"{shapfile}{suffix}.pkl"
+
+        if not os.path.exists(file_name):
+            save_pkl(shap_values, file_name)
+            print(f"Saved: {file_name}")
+            return  # Stop once we save a file
+
+    print("All 30 versions already exist, not saving.")
+
+def compute_covariance(X, y):
+    # Number of samples (n) and features (m)
+    n, m = X.shape
+
+    # Mean of the scores_test
+    y_bar = np.mean(y)
+    
+    # Mean of each feature in X
+    Xj_bar = np.mean(X, axis=0)
+    print(f"Xj_bar {Xj_bar.shape}")
+    
+    # Center the features and scores
+    X_centered = X - Xj_bar
+    y_centered = y - y_bar
+    print(f"X_centered {X_centered.shape}")
+    print(f"y_centered {y_centered.shape}")
+
+    # Compute covariance between each feature and scores_test
+    covariance = (X_centered.T @ y_centered) / (n - 1)
+    return covariance
+
+def get_reshaped_4D(array, brain_mask_path_):
+    nifti_mask = nib.load(brain_mask_path_)
+    nifti_data_mask = nifti_mask.get_fdata()
+    image_shape = nifti_data_mask.shape
+    # flatten mask
+    print("mask shape in 3D", np.shape(nifti_data_mask))
+    nifti_data_mask = nifti_data_mask.ravel()
+    # all reshaped zscores for this path
+    nb_subjects = array.shape[0]
+    print("nb_subjects  ",nb_subjects)
+    # on copie nb_subjects fois le masque de sorte à avoir un array de taille (nb_subjects,taille_masque_avec_0_et_1)
+    result_array_ = np.tile(nifti_data_mask, (nb_subjects, 1))
+    # where each subject of result_array is equal to 1, we copy the contents of the baltimore subjects 
+    print("result_array_.shape[0]",result_array_.shape[0])
+    for subject in range(0,result_array_.shape[0]): # loop through subjects
+        result_array_[subject,nifti_data_mask==1] = array[subject,:]
+    reshaped_img = result_array_.reshape((nb_subjects,*image_shape))
+
+    return reshaped_img

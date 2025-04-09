@@ -8,14 +8,23 @@ import ast, re
 import shap
 import xml.etree.ElementTree as ET
 import nilearn.plotting as plotting
-
-from utils import get_predict_sites_list, read_pkl, get_LOSO_CV_splits_N861, get_participants, save_pkl
+from utils import get_predict_sites_list, read_pkl, get_LOSO_CV_splits_N861, get_participants, save_pkl, get_LOSO_CV_splits_N763, \
+compute_covariance, get_reshaped_4D
+from deep_ensemble import get_mean
+from classif_VoxelWiseVBM_ML import get_all_data
+from collections import Counter
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import roc_auc_score, balanced_accuracy_score, recall_score
 from univariate_stats import get_scaled_data
 from sklearn.linear_model import LogisticRegressionCV
 from classif_VBMROI import remove_zeros 
+from torchvision.transforms.transforms import Compose
+
+from transforms import Crop, Padding, Normalize
+
+sys.path.append('/neurospin/psy_sbox/temp_sara/')
+from pylearn_mulm.mulm.residualizer import Residualizer
 
 # inputs
 ROOT = "/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/"
@@ -23,54 +32,78 @@ SHAP_DIR_SVMRBF=ROOT+"models/ShapValues/shap_computed_from_all_Xtrain/"
 DATAFOLDER=ROOT+"data/processed/"
 VOL_FILE_VBM = "/drf/local/spm12/tpm/labels_Neuromorphometrics.nii"
 VBMLOOKUP_FILE = "/drf/local/spm12/tpm/labels_Neuromorphometrics.xml"
+MASK_FILE ="/neurospin/psy_sbox/analyses/201906_schizconnect-vip-prague-bsnip-biodb-icaar-start_assemble-all/data/mni_cerebrum-gm-mask_1.5mm.nii.gz"
 
 # outputs
 RESULTS_FEATIMPTCE_AND_STATS_DIR=ROOT+"results_feat_imptce_and_univ_stats/"
 
 
-def make_shap_df(verbose=False, VBM=True, SBM=False):
-    # SHAP only computed for VBM ROI and age+sex+site residualization
+def make_shap_df(verbose=False, VBM=False, SBM=False):
+    assert not (VBM and SBM),"a feature type has to be chosen between VBM ROI and SBM ROI"
 
-    VBMdf = pd.read_csv(DATAFOLDER+"VBMROI_Neuromorphometrics.csv")
-    exclude_elements = ['participant_id', 'session', 'TIV', 'CSF_Vol', 'GM_Vol', 'WM_Vol']
-    VBMdf = VBMdf.drop(columns=exclude_elements)
-    list_roi = list(VBMdf.columns)
-    columns_with_only_zeros = VBMdf.columns[(VBMdf == 0).all()]
-    list_roi = [ roi for roi in list_roi if roi not in columns_with_only_zeros]
-    assert len(list_roi)==280
-    columns_with_zeros_indices = [VBMdf.columns.get_loc(col) for col in columns_with_only_zeros]
-    
+    # SHAP only computed for VBM ROI and age+sex+site residualization
+    if VBM:
+        VBMdf = pd.read_csv(DATAFOLDER+"VBMROI_Neuromorphometrics.csv")
+        exclude_elements = ['participant_id', 'session', 'TIV', 'CSF_Vol', 'GM_Vol', 'WM_Vol']
+        VBMdf = VBMdf.drop(columns=exclude_elements)
+        list_roi = list(VBMdf.columns)
+        columns_with_only_zeros = VBMdf.columns[(VBMdf == 0).all()]
+        list_roi = [ roi for roi in list_roi if roi not in columns_with_only_zeros]
+        assert len(list_roi)==280
+        columns_with_zeros_indices = [VBMdf.columns.get_loc(col) for col in columns_with_only_zeros]
+    if SBM : 
+        # always Destrieux and with subcortical regions
+        SBMdf = pd.read_csv(DATAFOLDER+"SBMROI_Destrieux_CT_SA_subcortical_N763.csv")
+        list_roi = [col for col in list(SBMdf.columns) if col not in ["participant_id","TIV"]]
+
     df_all_shap = pd.DataFrame(columns=['fold', 'ROI', 'mean_abs_shap','shap_array', 'mean_abs_shap_rdm','shap_array_rdm'])
 
     shap_all, shap_all_rdm = [], []
     if VBM: str_VBM = "VBM_SVM_RBF"
+    if SBM: str_SBM = "SBM_EN"
 
     for site in get_predict_sites_list():
         print(site)
         
-        shap_path = SHAP_DIR_SVMRBF + "ShapValues_"+str_VBM+"_"+site+"_background_alltr_parallelized_run1.pkl"
+        if VBM : shap_path = SHAP_DIR_SVMRBF + "ShapValues_"+str_VBM+"_"+site+"_background_alltr_parallelized_avril25_run1.pkl"
+        if SBM : shap_path = SHAP_DIR_SVMRBF + "ShapValues_"+str_SBM+"_"+site+"_background_alltr_parallelized_Destrieux_run1.pkl"
         all_runs_shap_rdm = []
 
         for run in range(1, 31): # from 1 to 30 included
-            shap_path_rdm = SHAP_DIR_SVMRBF + "ShapValues_"+str_VBM+"_"+site+"_background_alltr_parallelized_randomized_labels_run"+str(run)+".pkl"
+            if VBM : shap_path_rdm = SHAP_DIR_SVMRBF + "ShapValues_"+str_VBM+"_"+site+"_background_alltr_parallelized_randomized_labels_run"+str(run)+".pkl"
+            if SBM : shap_path_rdm = SHAP_DIR_SVMRBF + "ShapValues_"+str_SBM+"_"+site+"_background_alltr_parallelized_randomized_labels_Destrieux_run"+str(run)+".pkl"
             shap_rdm = read_pkl(shap_path_rdm)
-            shap_rdm = np.array([exp.values for exp in shap_rdm])
-            shap_rdm = np.delete(shap_rdm, columns_with_zeros_indices, axis=1)
-            assert shap_rdm.shape[1]==280 # 280 ROI (we removed the ROI that had all values across subjects equal to 0 (their shap values are also zeros))
-            # print(type(shap_rdm), np.shape(shap_rdm))
+            if VBM : 
+                shap_rdm = np.array([exp.values for exp in shap_rdm])
+                # the four VBM ROIs with zero values have been removed before computing the shap values 
+                shap_rdm = np.delete(shap_rdm, columns_with_zeros_indices, axis=1)
+                assert shap_rdm.shape[1]==280 , f"Expected 280 columns (array with permutations), \
+                    but got {shap_rdm.shape[1]} columns. Site: {site}"
+                # 280 ROI (we removed the ROI that had all values across subjects equal to 0 (their shap values are also zeros))
+            if SBM:
+                assert shap_rdm.shape[1]==330 , f"Expected 330 columns (array with permutations), \
+                    but got {shap_rdm.shape[1]} columns. Site: {site}"
             all_runs_shap_rdm.append(shap_rdm)
 
         all_runs_shap_rdm = np.concatenate(all_runs_shap_rdm, axis=0)
-        assert all_runs_shap_rdm.shape[1]==280
+        if VBM : assert all_runs_shap_rdm.shape[1]==280
+        if SBM : assert all_runs_shap_rdm.shape[1]==330
         if verbose : print("all_runs_shap_rdm ",all_runs_shap_rdm.shape)
         shap_all_rdm.append(all_runs_shap_rdm)
 
-        mean_abs_shap_rdm = np.mean(np.abs(all_runs_shap_rdm), axis=0) # mean over test set subjects x 30 runs with permuted labels : shape = (nb roi,) = (280,)
-
+        # mean over test set subjects x 30 runs with permuted labels : shape = (nb roi,) = (280,)
+        mean_abs_shap_rdm = np.mean(np.abs(all_runs_shap_rdm), axis=0) 
         shap_values = read_pkl(shap_path)
-        shap_values = np.array([exp.values for exp in shap_values])
+
+        if VBM : 
+            shap_values = np.array([exp.values for exp in shap_values])
+
         assert shap_values.shape[0]*30==all_runs_shap_rdm.shape[0]
-        assert shap_values.shape[1]==280 # the four ROIs with zero values have been removed before computing the shap values 
+        if VBM : assert shap_values.shape[1]==280, f"Expected 280 columns (array without permutations), \
+                but got {shap_values.shape[1]} columns. Site: {site}"
+        if SBM : assert shap_values.shape[1]==330, f"Expected 330 columns (array without permutations), \
+                but got {shap_rdm.shape[1]} columns. Site: {site}"
+            
         shap_all.append(shap_values)
         if verbose : print("shap_values ",shap_values.shape)
 
@@ -122,46 +155,97 @@ def get_shared_specific_or_suppressor_ROIs_btw_folds(dict_ROIs, verbose=False):
 
     return shared_strings
 
-def read_bootstrapped_shap(save=False):
-    # SHAP only computed for VBM ROI and age+sex+site residualization
+
+def get_all_Xte_concatenated(VBM=False, SBM=False):
+    # retrieve all test set ROI values for all folds
+    if VBM : 
+        splits = get_LOSO_CV_splits_N861() 
+        Nmax=800  # using maximum training set size for dataset with all VBM-preprocessed subjects, N861 
+    if SBM : 
+        splits = get_LOSO_CV_splits_N763()
+        Nmax = 700 # using maximum training set size for dataset with all SBM-preprocessed subjects, N763
+
+    # read participants dataframe
+    participants = get_participants()
+    participants_all = list(splits["Baltimore-"+str(Nmax)][0])+list(splits["Baltimore-"+str(Nmax)][1])
+    msk = list(participants[participants['participant_id'].isin(participants_all)].index)
+    participants_ROI = participants.iloc[msk]   
+    participants_ROI = participants_ROI.reset_index(drop=True)
+
+    # prep residualizer
+    formula_res, formula_full = "site + age + sex", "site + age + sex + dx"
+    residualizer = Residualizer(data=participants_ROI, formula_res=formula_res, formula_full=formula_full)
+    Zres = residualizer.get_design_mat(participants_ROI)
+
+    # read ROI df
+    if VBM : ROIdf = pd.read_csv(DATAFOLDER+"VBMROI_Neuromorphometrics.csv")
+    if SBM : ROIdf = pd.read_csv(DATAFOLDER+"SBMROI_Destrieux_CT_SA_subcortical_N763.csv")
+    # reorder VBMdf to have rows in the same order as participants_ROI
+    ROIdf = ROIdf.set_index('participant_id').reindex(participants_ROI["participant_id"].values).reset_index()
+
+    # create concatenation of all test sets participant's ROIs in Xte_arr np array
+    Xte_list, list_rois, participants = [], [], []
+
+    for site in get_predict_sites_list():
+        df_te_ = ROIdf[ROIdf["participant_id"].isin(splits[site+"-"+str(Nmax)][1])]
+        df_tr_ = ROIdf[ROIdf["participant_id"].isin(splits[site+"-"+str(Nmax)][0])]
+        # find index in participants df of the train and test subjects for the current LOSO CV site and train data size
+        train = list(participants_ROI.index[participants_ROI['participant_id'].isin(splits[site+"-"+str(Nmax)][0])])
+        test = list(participants_ROI.index[participants_ROI['participant_id'].isin(splits[site+"-"+str(Nmax)][1])])
+
+        if VBM : exclude_elements = ['participant_id', 'session', 'TIV', 'CSF_Vol', 'GM_Vol', 'WM_Vol']
+        if SBM : exclude_elements = ['participant_id', 'TIV']
+        participants.append(df_te_["participant_id"].values)
+        df_te_ = df_te_.drop(columns=exclude_elements)
+        df_tr_ = df_tr_.drop(columns=exclude_elements)
+        if VBM : 
+            columns_with_only_zeros = ROIdf.columns[(ROIdf == 0).all()]
+            columns_with_zeros_indices = [ROIdf.columns.get_loc(col) for col in columns_with_only_zeros]
+            df_te_ = remove_zeros(df_te_) # remove ROIs with zero values for all subjects
+            df_tr_ = remove_zeros(df_tr_)
+
+        # fit residualizer just like before classification (using the training data for each fold)
+        X_train = df_tr_.values
+        X_test = df_te_.values
+        residualizer.fit(X_train, Zres[train])
+        X_test = residualizer.transform(X_test, Zres[test])
+
+        # fit scaler using training data for each fold
+        scaler_ = StandardScaler()
+        X_train = scaler_.fit_transform(X_train)
+        X_test = scaler_.transform(X_test)
+
+        if VBM : assert np.shape(X_test)[1]==280, "wrong nb of ROIs"
+        if SBM : assert np.shape(X_test)[1]==330, "wrong nb of ROIs"
+
+        Xte_list.append(X_test)
+        if site=="Baltimore": list_rois = list(df_te_.columns)
+
+    all_folds_Xtest_concatenated = np.concatenate(Xte_list, axis=0)
+    participants = np.concatenate(participants,axis=0)
+    if SBM : return all_folds_Xtest_concatenated, list_rois, participants
+    if VBM : return all_folds_Xtest_concatenated, list_rois, columns_with_zeros_indices, participants
+
+def read_bootstrapped_shap(save=False, VBM=False, SBM=False):
+    # remider : in this study, SHAP values are only computed for VBM ROI and age+sex+site residualization
+    assert not (VBM and SBM),"a feature type has to be chosen between VBM ROI and SBM ROI"
 
     # get univariate statistics (obtained with univariate_stats.py)
-    path_univ_statistics = RESULTS_FEATIMPTCE_AND_STATS_DIR+"statsuniv_rois_res_age_sex_site.xlsx"
+    if VBM : path_univ_statistics = RESULTS_FEATIMPTCE_AND_STATS_DIR+"statsuniv_rois_res_age_sex_site_VBM_avril25.xlsx"
+    if SBM : path_univ_statistics = RESULTS_FEATIMPTCE_AND_STATS_DIR+"statsuniv_rois_res_age_sex_site_SBM_avril25.xlsx"
+
     univ_statistics = pd.read_excel(path_univ_statistics)
 
-    path_shap_summary = SHAP_DIR_SVMRBF+'SHAP_summary_including_shap_from_30rdm_runs.xlsx'
+    if VBM: path_shap_summary = SHAP_DIR_SVMRBF+'SHAP_summary_including_shap_from_30rdm_runs_VBM_ROI_avril25.xlsx'
+    if SBM: path_shap_summary = SHAP_DIR_SVMRBF+'SHAP_summary_including_shap_from_30rdm_runs_SBM_ROI_avril25.xlsx'
 
     if not os.path.exists(path_shap_summary) :
         df_all_shap = make_shap_df()
     else : df_all_shap = pd.read_excel(path_shap_summary)
 
-    # retrieve all test set ROI values for all folds
-    splits = get_LOSO_CV_splits_N861()   
-    # read participants dataframe
-    participants = get_participants()
+    if VBM : all_folds_Xtest_concatenated, list_rois , columns_with_zeros_indices, _ = get_all_Xte_concatenated(VBM=VBM, SBM=SBM)
+    if SBM : all_folds_Xtest_concatenated, list_rois , _ = get_all_Xte_concatenated(VBM=VBM, SBM=SBM)
 
-    Nmax=800 # using maximum training set size for dataset with all VBM-preprocessed subjects, N861 
-    VBMdf = pd.read_csv(DATAFOLDER+"VBMROI_Neuromorphometrics.csv")
-    participants_all = list(splits["Baltimore-"+str(Nmax)][0])+list(splits["Baltimore-"+str(Nmax)][1])
-    msk = list(participants[participants['participant_id'].isin(participants_all)].index)
-    participants_VBM = participants.iloc[msk]   
-    participants_VBM = participants_VBM.reset_index(drop=True)
-    # reorder VBMdf to have rows in the same order as participants_VBM
-    VBMdf = VBMdf.set_index('participant_id').reindex(participants_VBM["participant_id"].values).reset_index()
-
-    # create concatenation of all test sets participant's ROIs in Xte_arr np array
-    Xte_list, list_rois = [], []
-
-    for site in get_predict_sites_list():
-        df_te_ = VBMdf[VBMdf["participant_id"].isin(splits[site+"-"+str(Nmax)][1])]
-        exclude_elements = ['participant_id', 'session', 'TIV', 'CSF_Vol', 'GM_Vol', 'WM_Vol']
-        df_te_ = df_te_.drop(columns=exclude_elements)
-        df_te_ = remove_zeros(df_te_) # remove ROIs with zero values for all subjects
-        Xte_list.append(df_te_.values)
-        assert np.shape(df_te_.values)[1]==280
-        if site=="Baltimore": list_rois = list(df_te_.columns)
-
-    all_folds_Xtest_concatenated = np.concatenate(Xte_list,axis=0)
     print(type(all_folds_Xtest_concatenated), np.shape(all_folds_Xtest_concatenated))
         
     # SHAP Statistics mean,std, n, CI 
@@ -193,15 +277,20 @@ def read_bootstrapped_shap(save=False):
         shap_df_stats_current_site = shap_df_stats[shap_df_stats["fold"]==site].copy()
         shap_df_stats_current_site = shap_df_stats_current_site.set_index("ROI")
 
-        shap_arr_one_fold = read_pkl(SHAP_DIR_SVMRBF + "ShapValues_VBM_SVM_RBF_"+site+"_background_alltr_parallelized.pkl")
-        shap_arr_one_fold = np.array([exp.values for exp in shap_arr_one_fold])
+        if VBM : 
+            shap_arr_one_fold = read_pkl(SHAP_DIR_SVMRBF + "ShapValues_VBM_SVM_RBF_"+site+"_background_alltr_parallelized_avril25_run1.pkl")
+            shap_arr_one_fold = np.array([exp.values for exp in shap_arr_one_fold])
+            # shap_arr_one_fold = np.delete(shap_arr_one_fold, columns_with_zeros_indices, axis=1)
+        if SBM : shap_arr_one_fold = read_pkl(SHAP_DIR_SVMRBF + "ShapValues_SBM_EN_"+site+"_background_alltr_parallelized_Destrieux_run1.pkl")
+
         concatenated_shap_arrays.append(shap_arr_one_fold)
 
         # compute mean, standard deviation, and count of mean absolute shap values for testing set of current fold
         m = shap_df_stats_current_site["mean_abs_shap"]
         s = shap_df_stats_current_site["std_abs_shap"]
         n = shap_df_stats_current_site["count_test_subjects"]
-        assert len(m)==len(s) and len(s)==len(n) and len(n)==280
+        if VBM : assert len(m)==len(s) and len(s)==len(n) and len(n)==280
+        if SBM : assert len(m)==len(s) and len(s)==len(n) and len(n)==330
 
         # Critical value for t at alpha / 2:
         t_alpha2 = -scipy.stats.t.ppf(q=0.05/2, df=n-1, loc=0)
@@ -211,7 +300,7 @@ def read_bootstrapped_shap(save=False):
         shap_rnd_absmean = shap_df_stats_current_site[["mean_abs_shap_rdm"]].copy()
 
         # Convert to a single-row DataFrame with ROIs as columns
-        shap_rnd_absmean = shap_rnd_absmean.drop_duplicates().T
+        shap_rnd_absmean = shap_rnd_absmean.T
         m_h0 = shap_rnd_absmean
         m_h0 = m_h0[m.index]
 
@@ -231,14 +320,17 @@ def read_bootstrapped_shap(save=False):
         if not "type" in shap_stat: 
             # Filter Features based on significance of SHAP values
             shap_stat = shap_stat[shap_stat.select == 1]
-            if site =="Baltimore": assert shap_stat.shape[0] == 140 # check that we have 140 SHAP where H0 is rejected
+            if site =="Baltimore" and VBM: assert shap_stat.shape[0] == 140, f"shape is {shap_stat.shape[0]} but should be 140" # check that we have 140 SHAP where H0 is rejected
+            if site =="Baltimore" and SBM: assert shap_stat.shape[0] == 112 # check that we have 143 SHAP where H0 is rejected
+
             shap_stat["type"] = None # initialize empty column
             shap_stat.loc[shap_stat.diag_pcor_bonferroni < 0.05, "type"] = "specific" 
             shap_stat.loc[shap_stat.diag_pcor_bonferroni > 0.05, "type"] = "suppressor"
 
             if save:
-                shap_stat.to_excel(RESULTS_FEATIMPTCE_AND_STATS_DIR+"shap_from_SVM_RBF_"+site+"-univstat.xlsx", sheet_name='SHAP_roi_univstat_'+site, index=False)
-        
+                if VBM : shap_stat.to_excel(RESULTS_FEATIMPTCE_AND_STATS_DIR+"shap_from_SVM_RBF_VBM_"+site+"-univstat_avril25.xlsx", sheet_name='SHAP_roi_univstat_'+site, index=False)
+                if SBM : shap_stat.to_excel(RESULTS_FEATIMPTCE_AND_STATS_DIR+"shap_from_EN_SBM_"+site+"-univstat_avril25.xlsx", sheet_name='SHAP_roi_univstat_'+site, index=False)
+
         specific_ROI[site]=shap_stat[shap_stat["type"]=="specific"]["ROI"].values
         suppressor_ROI[site]=shap_stat[shap_stat["type"]=="suppressor"]["ROI"].values
 
@@ -251,97 +343,70 @@ def read_bootstrapped_shap(save=False):
 
     ################# SAVE SUMMARY VALUES FOR ANALYSIS OF SHAP VALUES ######################  
     concatenated_shap_arrays=np.concatenate(concatenated_shap_arrays, axis=0)
-    assert concatenated_shap_arrays.shape == all_folds_Xtest_concatenated.shape, "Shape mismatch between shap array and testing data array!"
+
+    assert concatenated_shap_arrays.shape == all_folds_Xtest_concatenated.shape, \
+        f"Shape mismatch! SHAP: {concatenated_shap_arrays.shape}, X_test: {all_folds_Xtest_concatenated.shape}"
+
     indices_specificROI = [list_rois.index(roi) for roi in shap_spec if roi in list_rois]
     indices_suppressorROI = [list_rois.index(roi) for roi in shap_suppr if roi in list_rois]
 
-    # Negate SHAP values for ROIs containing 'CSF_Vol' --> CSF volume varies inversely from GM volume
-    csf_indices = [i for i, roi in enumerate(list_rois) if 'CSF_Vol' in roi]
-    concatenated_shap_arrays_negatedCSF = concatenated_shap_arrays.copy()
-    concatenated_shap_arrays_negatedCSF[:, csf_indices] *= -1
+    if VBM :
+        # Negate SHAP values for ROIs containing 'CSF_Vol' --> CSF volume varies inversely from GM volume
+        csf_indices = [i for i, roi in enumerate(list_rois) if 'CSF_Vol' in roi]
+        concatenated_shap_arrays_negatedCSF = concatenated_shap_arrays.copy()
+        concatenated_shap_arrays_negatedCSF[:, csf_indices] *= -1
 
+        # get dictionary of correspondecies of ROI names from abbervations to full ROI names
+        atlas_df = pd.read_csv(ROOT+"data/atlases/lobes_Neuromorphometrics.csv", sep=';')
+        dict_atlas_roi_names = atlas_df.set_index('ROIabbr')['ROIname'].to_dict()
+
+    print("concatenated_shap_arrays_negatedCSF ",np.shape(concatenated_shap_arrays_negatedCSF))
     # Order specific ROIs by mean absolute SHAP values
-    mean_abs = np.mean(np.abs(concatenated_shap_arrays_negatedCSF[:,indices_specificROI]),axis=0)
+    if VBM : mean_abs = np.mean(np.abs(concatenated_shap_arrays_negatedCSF[:,indices_specificROI]),axis=0)
+    if SBM : mean_abs = np.mean(np.abs(concatenated_shap_arrays[:,indices_specificROI]),axis=0)
+
     ordered_indices = np.argsort(mean_abs)[::-1]  # [::-1] reverses the order to get descending
     sorted_indices_specificROI = np.array(indices_specificROI)[ordered_indices]
 
-    # get dictionary of correspondecies of ROI names from abbervations to full ROI names
-    atlas_df = pd.read_csv(ROOT+"data/atlases/lobes_Neuromorphometrics.csv", sep=';')
-    dict_atlas_roi_names = atlas_df.set_index('ROIabbr')['ROIname'].to_dict()
-
     # save info necessary for summary plot of SHAP values for specific and suppressor ROI
-    dict_summary = {"dict_atlas_roi_names":dict_atlas_roi_names, "indices_specific_roi":indices_specificROI,"indices_suppressorROI":indices_suppressorROI,\
+    dict_summary = {"indices_specific_roi":indices_specificROI,"indices_suppressorROI":indices_suppressorROI,\
         "sorted_indices_specificROI":sorted_indices_specificROI, "all_folds_Xtest_concatenated":all_folds_Xtest_concatenated,"list_rois":list_rois,\
-         "concatenated_shap_arrays_with_negated_CSF":concatenated_shap_arrays_negatedCSF, "concatenated_shap_arrays":concatenated_shap_arrays}
-    save_pkl(dict_summary, RESULTS_FEATIMPTCE_AND_STATS_DIR+"ShapSummaryDictionnaryForBeeswarmPlot.pkl")
+            "concatenated_shap_arrays":concatenated_shap_arrays}
+    if VBM : 
+        dict_summary["concatenated_shap_arrays_with_negated_CSF"]=concatenated_shap_arrays_negatedCSF
+        dict_summary["dict_atlas_roi_names"]=dict_atlas_roi_names
+        if save: save_pkl(dict_summary, RESULTS_FEATIMPTCE_AND_STATS_DIR+"ShapSummaryDictionnaryForBeeswarmPlot_VBM.pkl")
 
-def plot_glassbrain(): 
-    """
-        Aim : plot glassbrain of specfic ROI from SHAP values obtained with an SVM-RBF and VBM ROI features
-    """
-    specific_roi_df = read_pkl(RESULTS_FEATIMPTCE_AND_STATS_DIR+"specific_ROI_SHAP_SVMRBF_VBM.pkl")
-    specific_ROI_dict = specific_roi_df.set_index('ROI')['mean_abs_shap'].to_dict()
-    print(specific_roi_df)
-    print(specific_ROI_dict)
+    if SBM and save : save_pkl(dict_summary, RESULTS_FEATIMPTCE_AND_STATS_DIR+"ShapSummaryDictionnaryForBeeswarmPlot_SBM.pkl")
 
-    ref_im = nibabel.load(VOL_FILE_VBM)
-    ref_arr = ref_im.get_fdata()
-    labels = sorted(set(np.unique(ref_arr).astype(int))- {0}) # 136 labels --> 'Left Inf Lat Vent', 'Right vessel', 'Left vessel' missing in data
-    atlas_df = pd.read_csv(ROOT+"data/atlases/lobes_Neuromorphometrics.csv", sep=';')
-    texture_arr = np.zeros(ref_arr.shape, dtype=float)
-    
-    
-    for name, val in specific_ROI_dict.items():
-        # get GM volume (there is one row for GM and another for CSF for each ROI but the ROIbaseid values are the same for both so we picked GM vol)
-        baseids = atlas_df[(atlas_df['ROIname'] == name) & (atlas_df['volume'] == 'GM')]["ROIbaseid"].values
-        int_list = list(map(int, re.findall(r'\d+', baseids[0])))
-        if "Left" in name: 
-            if len(int_list)==2: baseid = int_list[1]
-            else : baseid = int_list[0]
-        else : baseid = int_list[0]
-        if name in ["Left Pallidum", "Right Pallidum"]: texture_arr[ref_arr == baseid] = val
-        else : texture_arr[ref_arr == baseid] = - val
-
-    print("nb unique vals :",len(np.unique(texture_arr)))
-    print(np.shape(texture_arr))
-
-    cmap = plt.cm.coolwarm
-    vmin = np.min(texture_arr)
-    vmax = np.max(texture_arr)
-    print("vmin vmax texture arr", vmin,"     ",vmax)
-    texture_im = nibabel.Nifti1Image(texture_arr, ref_im.affine)
-
-    plotting.plot_glass_brain(
-        texture_im,
-        display_mode="ortho",
-        colorbar=True,
-        cmap=cmap,
-        plot_abs=False ,
-        alpha = 0.95 ,
-        threshold=0,
-        title="glassbrain of specific ROI")
-    plotting.show()
-
-def plot_beeswarm():
+def plot_beeswarm(VBM=False, SBM=False):
     """
         Aim: printing the mean absolute shap values and their feature's values for all shap values of all 861 test subjects 
             (concatenation of test subjects' feature values and SHAP values for the 12 folds), only for ROIs/features previously 
             found to be 'specific' (ie. have a (hypothetically) direct impact on BD diagnosis).
     """
+    assert not (VBM and SBM),"a feature type has to be chosen between VBM ROI and SBM ROI"
 
-    dict_summary= read_pkl(RESULTS_FEATIMPTCE_AND_STATS_DIR+"ShapSummaryDictionnaryForBeeswarmPlot.pkl")
-    
-    concatenated_shap_arrays_negatedCSF = dict_summary["concatenated_shap_arrays_with_negated_CSF"]
+    if VBM : dict_summary= read_pkl(RESULTS_FEATIMPTCE_AND_STATS_DIR+"ShapSummaryDictionnaryForBeeswarmPlot_VBM.pkl")
+    if SBM : dict_summary= read_pkl(RESULTS_FEATIMPTCE_AND_STATS_DIR+"ShapSummaryDictionnaryForBeeswarmPlot_SBM.pkl")
+
+    if VBM : concatenated_shap_arrays_with_negated_CSF = dict_summary["concatenated_shap_arrays_with_negated_CSF"]
+    if SBM : concatenated_shap_arrays = dict_summary["concatenated_shap_arrays"]
     sorted_indices_specificROI = dict_summary["sorted_indices_specificROI"]
     all_folds_Xtest_concatenated = dict_summary["all_folds_Xtest_concatenated"]
-    dict_atlas_roi_names = dict_summary["dict_atlas_roi_names"]
+    if VBM : dict_atlas_roi_names = dict_summary["dict_atlas_roi_names"]
     list_rois = dict_summary["list_rois"]
-    mean_abs_specific = np.mean(np.abs(concatenated_shap_arrays_negatedCSF[:,sorted_indices_specificROI]),axis=0)
+
+    if SBM : mean_abs_specific = np.mean(np.abs(concatenated_shap_arrays[:,sorted_indices_specificROI]),axis=0)
+    if VBM : mean_abs_specific = np.mean(np.abs(concatenated_shap_arrays_with_negated_CSF[:,sorted_indices_specificROI]),axis=0)
 
     # SHAP summary plot
-    shap.summary_plot(concatenated_shap_arrays_negatedCSF[:,sorted_indices_specificROI], all_folds_Xtest_concatenated[:,sorted_indices_specificROI], \
+    if VBM : shap.summary_plot(concatenated_shap_arrays_with_negated_CSF[:,sorted_indices_specificROI], all_folds_Xtest_concatenated[:,sorted_indices_specificROI], \
                       feature_names=[dict_atlas_roi_names[list_rois[i]] for i in sorted_indices_specificROI], max_display=len(sorted_indices_specificROI))
-    
+   
+    if SBM : shap.summary_plot(concatenated_shap_arrays[:,sorted_indices_specificROI], all_folds_Xtest_concatenated[:,sorted_indices_specificROI], \
+                      feature_names=[list_rois[i] for i in sorted_indices_specificROI], max_display=len(sorted_indices_specificROI))
+   
     print("Sorted ROI (highest to lowest mean_abs):", [list_rois[i] for i in sorted_indices_specificROI])
     # get univariate statistics (obtained with univariate_stats.py)
     path_univ_statistics = RESULTS_FEATIMPTCE_AND_STATS_DIR+"statsuniv_rois_res_age_sex_site.xlsx"
@@ -350,12 +415,69 @@ def plot_beeswarm():
     recap = stats_specific_ROI[stats_specific_ROI["diag_pcor_bonferroni"] < 0.05][["ROI", "diag_pcor_bonferroni"]]
     recap["mean_abs_shap"] = np.round(mean_abs_specific,4)
 
-    recap["ROI"] = recap['ROI'].replace(dict_atlas_roi_names)
-    save_pkl(recap, RESULTS_FEATIMPTCE_AND_STATS_DIR+"specific_ROI_SHAP_SVMRBF_VBM.pkl")
+    if VBM : 
+        recap["ROI"] = recap['ROI'].replace(dict_atlas_roi_names)
+        save_pkl(recap, RESULTS_FEATIMPTCE_AND_STATS_DIR+"specific_ROI_SHAP_SVMRBF_VBM.pkl")
+    if SBM : save_pkl(recap, RESULTS_FEATIMPTCE_AND_STATS_DIR+"specific_ROI_SHAP_EN_SBM.pkl")
 
     print("p-values after bonferroni correction and mean abs shap values for specific ROIs :\n", recap)
 
-    # Illustrate Suppressor variable with linear model
+
+def plot_glassbrain(dict_plot=None, title=""): 
+    """
+        Aim : plot glassbrain of specfic ROI from SHAP values obtained with an SVM-RBF and VBM ROI features
+    """
+    if dict_plot is None:
+        specific_roi_df = read_pkl(RESULTS_FEATIMPTCE_AND_STATS_DIR+"specific_ROI_SHAP_SVMRBF_VBM.pkl")
+        dict_plot = specific_roi_df.set_index('ROI')['mean_abs_shap'].to_dict()
+        print(specific_roi_df)
+    
+    print("dict_plot\n")
+    for k,v in dict_plot.items():
+        print(k, "  ",v)
+
+    ref_im = nibabel.load(VOL_FILE_VBM)
+    ref_arr = ref_im.get_fdata()
+    # labels = sorted(set(np.unique(ref_arr).astype(int))- {0}) # 136 labels --> 'Left Inf Lat Vent', 'Right vessel', 'Left vessel' missing in data
+    atlas_df = pd.read_csv(ROOT+"data/atlases/lobes_Neuromorphometrics.csv", sep=';')
+    texture_arr = np.zeros(ref_arr.shape, dtype=float)
+    
+    
+    for name, val in dict_plot.items():
+        # get GM volume (there is one row for GM and another for CSF for each ROI but the ROIbaseid values are the same for both so we picked GM vol)
+        # each baseid is the number associated to the ROI in the nifti image
+        baseids = atlas_df[(atlas_df['ROIname'] == name) & (atlas_df['volume'] == 'GM')]["ROIbaseid"].values
+        int_list = list(map(int, re.findall(r'\d+', baseids[0])))
+        if "Left" in name: 
+            if len(int_list)==2: baseid = int_list[1]
+            else : baseid = int_list[0]
+        else : baseid = int_list[0]
+
+        if dict_plot is None:
+            if name in ["Left Pallidum", "Right Pallidum"]: texture_arr[ref_arr == baseid] = val
+            else : texture_arr[ref_arr == baseid] = - val
+        else : texture_arr[ref_arr == baseid] = val
+
+    print("nb unique vals :",len(np.unique(texture_arr)), " \n",np.unique(texture_arr))
+    print(np.shape(texture_arr))
+
+    cmap = plt.cm.coolwarm
+    vmin = np.min(texture_arr)
+    vmax = np.max(texture_arr)
+    print("vmin vmax texture arr", vmin,"     ",vmax)
+    texture_im = nibabel.Nifti1Image(texture_arr, ref_im.affine)
+    if title == "": title="specific ROI"
+    plotting.plot_glass_brain(
+        texture_im,
+        display_mode="ortho",
+        colorbar=True,
+        cmap=cmap,
+        plot_abs=False ,
+        alpha = 0.95 ,
+        threshold=0,
+        title=title)
+    plotting.show()
+
 
 def regression_analysis_with_specific_and_suppressor_ROI(plot_and_save_jointplot=False,plot_and_save_kde_plot=False):
     #Illustrate Suppressor variable with linear model
@@ -449,10 +571,165 @@ def regression_analysis_with_specific_and_suppressor_ROI(plot_and_save_jointplot
         plt.close()
 
 
-def forward_maps_VBMROI():
-    scores_path = ROOT+"results_classif/classifVBM/svm_N800_Neuromorphometrics_VBM_ROI_N861.pkl"
+def forward_maps_ROI(VBM=False, SBM=False):
+    # Read classification scores
+    if VBM : scores_path = ROOT+"results_classif/stacking/SVMRBF_VBMROI/scores_tr_te_N861_train_size_N800.pkl"
     scores = read_pkl(scores_path)
-    print(scores)
+    concatenated_scores , concatenated_ids = [], []
+    for site in get_predict_sites_list():
+        concatenated_scores.append(scores[site]["score test"])
+        concatenated_ids.append(scores[site]["participant_ids_te"])
+    concatenated_ids= np.concatenate(concatenated_ids, axis=0)
+    concatenated_scores= np.concatenate(concatenated_scores, axis=0)
+
+    if VBM : all_folds_Xtest_concatenated, list_rois , columns_with_zeros_indices , participants_te = get_all_Xte_concatenated(VBM=VBM, SBM=SBM)
+    if SBM : all_folds_Xtest_concatenated, list_rois, participants_te = get_all_Xte_concatenated(VBM=VBM, SBM=SBM)
+
+    print("participants ", type(participants_te), np.shape(participants_te))
+    assert np.array_equal(concatenated_ids, participants_te)
+    print("concatenated_scores ",np.shape(concatenated_scores))
+    print("all_folds_Xtest_concatenated ",np.shape(all_folds_Xtest_concatenated))
+
+    # Compute Covariances between the ROIs of test sets subjects and their corresponding classification scores
+    cov = compute_covariance(all_folds_Xtest_concatenated, concatenated_scores) #shape of cov is the nb of ROI (280 for VBM, 330 for SBM)
+    dict_cov = dict(zip(list_rois,cov))
+    if VBM:
+        for roi in list_rois:
+            if "CSF_Vol" in roi: dict_cov[roi]*=-1
+
+    indices_rois_GM =[i for i, roiname in enumerate(list_rois) if "GM_Vol" in roiname]
+    indices_rois_CSF =[i for i, roiname in enumerate(list_rois) if "CSF_Vol" in roiname]
+
+    list_rois_GM=[roi for roi in list_rois if "GM_Vol" in roi]
+    list_rois_CSF=[roi for roi in list_rois if "CSF_Vol" in roi]
+
+    # Compute the 95th percentile threshold for absolute value of covariances
+    thresholdGM = np.percentile(abs(cov[indices_rois_GM]), 95)
+    thresholdCSF = np.percentile(abs(cov[indices_rois_CSF]), 95)
+
+    print("threshold ",thresholdGM, "  ",thresholdCSF)
+    GM_impt, CSF_impt = [],[]
+    # Save values >= 95th percentile
+    for k,v in dict_cov.items():
+        if "GM_Vol" in k and (abs(v)>=thresholdGM): 
+            print(k, "  ",v)
+            GM_impt.append(k)
+        if "CSF_Vol" in k and (abs(v)>=thresholdCSF): 
+            print(k, "  ",v)
+            CSF_impt.append(k)
+
+    # Create the dictionary of important ROIs depending on covariances
+    cov_impt = {k: v for k, v in dict_cov.items() if k in GM_impt+CSF_impt}
+    roi_shared = [roi for roi in GM_impt if roi in CSF_impt]
+    assert roi_shared==[]
+
+    if VBM:
+        # get dictionary of correspondecies of ROI names from abbervations to full ROI names
+        atlas_df = pd.read_csv(ROOT+"data/atlases/lobes_Neuromorphometrics.csv", sep=';')
+        dict_atlas_roi_names = atlas_df.set_index('ROIabbr')['ROIname'].to_dict()
+
+    new_dict = {dict_atlas_roi_names.get(k, k): v for k, v in cov_impt.items()}
+
+    plot_glassbrain(new_dict, title="VBM ROI with significant covariates obtained with forward maps")
+
+
+def forward_maps_voxelwise():
+    mean_ypred_by_site_dict,  y_true_for_each_site_dict = get_mean(list_models= [1,3,5,7,8], transfer=True, metric = "roc_auc", \
+             verbose=False, test = True, train=False, model ="densenet")
+    print(type(mean_ypred_by_site_dict), np.shape(mean_ypred_by_site_dict), mean_ypred_by_site_dict.keys())
+    print(type(mean_ypred_by_site_dict["Baltimore"]))
+
+    cov_array_file = RESULTS_FEATIMPTCE_AND_STATS_DIR+"voxelwise_covariances_array.pkl" 
+
+    total = 0
+    scores_concat = []
+    for site in get_predict_sites_list():
+        total+=len(mean_ypred_by_site_dict[site])
+        scores_concat.append(mean_ypred_by_site_dict[site])
+
+    scores_concat = np.concatenate(scores_concat,axis=0)
+    print("shape scores_concat", np.shape(scores_concat), type(scores_concat))
+    print("total ", total)
+
+    df_Xim_all = get_all_data(verbose=False)
+    #######
+
+
+    participants = get_participants()
+    print("np.shape participants",np.shape(participants))
+    splits = get_LOSO_CV_splits_N861()    
+    # select the participants for VBM ROI (train+test participants of any of the 12 splits)
+    # it has to be for max training set size, otherwise it won't cover the whole range of subjects
+    participants_all = list(splits["Baltimore-"+str(800)][0])+list(splits["Baltimore-"+str(800)][1])
+    msk = list(participants[participants['participant_id'].isin(participants_all)].index)
+    participants_VBM = participants.iloc[msk]   
+    participants_VBM = participants_VBM.reset_index(drop=True)
+
+    # transforms applied to images before training the DL models
+    input_transforms = Compose([Crop((1, 121, 128, 121)), Padding([1, 128, 128, 128], mode='constant'),  Normalize()])
+    input_transformsmask = Compose([Crop((1, 121, 128, 121)), Padding([1, 128, 128, 128], mode='constant')])
+
+
+    # reorder voxelwiseVBMdf to have rows in the same order as participants_VBM
+    voxelwiseVBMdf = df_Xim_all.set_index('participant_id').reindex(participants_VBM["participant_id"].values).copy().reset_index()
+    concatenated_Xte = []
+    # get training and testing ROI dataframes (contains participant_id + TIV in addition to 330 ROIs)
+    for site in get_predict_sites_list():
+        df_te_ = voxelwiseVBMdf[voxelwiseVBMdf["participant_id"].isin(splits[site+"-"+str(800)][1])]
+        y_test = pd.merge(df_te_, participants_VBM, on ="participant_id")["dx"].values
+        print(np.array_equal(y_test,y_true_for_each_site_dict[site]))
+        # drop participant_ids
+        df_te_ = df_te_.drop(columns="participant_id")
+        X_test = np.vstack(df_te_["data"].values) 
+        assert np.shape(X_test)[1]==331695
+        print("X_test shape ",np.shape(X_test))
+
+        data = get_reshaped_4D(X_test, MASK_FILE)
+        data = np.reshape(data, (data.shape[0], 1, *data.shape[1:]))
+        print(np.shape(data), type(data))
+        
+        mask_img = nibabel.load(MASK_FILE)
+        mask_data = mask_img.get_fdata()
+        print("mask img", np.shape(mask_img), type(mask_img))
+        print("mask_data ",np.shape(mask_data), type(mask_data))
+        print("unique mask ",np.unique(mask_data))
+
+        print(np.sum(mask_data==0))
+        print(np.sum(mask_data==1))
+        mask_data = mask_data.reshape(1, *mask_data.shape)
+        print("mask_data ",np.shape(mask_data), type(mask_data))
+        # apply transforms
+        mask_data = input_transformsmask(mask_data).squeeze()
+        print("mask_data ",np.shape(mask_data), type(mask_data))
+
+        list_Ximte=[]
+        # loop through test subjects of current fold
+        for subject in range(0,len(data)):
+            print(subject,"/",len(data))
+            print("np.shape data[subject] ",np.shape(data[subject]), type(data[subject]))
+
+            sub_3D = input_transforms(data[subject]).squeeze()
+            print(np.shape(sub_3D), type(sub_3D))
+            sub_3Dflat = sub_3D.flatten()
+            assert sub_3Dflat.shape == (2097152,)
+            sub_3Dflat = data[subject].squeeze().flatten()
+
+            print(np.shape(sub_3Dflat), type(sub_3Dflat))
+            list_Ximte.append(sub_3Dflat)
+        list_Ximte = np.array(list_Ximte)
+        print(np.shape(list_Ximte))            
+        concatenated_Xte.append(list_Ximte)
+        
+    concatenated_Xte = np.concatenate(concatenated_Xte, axis=0)
+    print("concatenated_Xte ",np.shape(concatenated_Xte), type(concatenated_Xte))
+    # compute covariances
+    cov = compute_covariance(concatenated_Xte, scores_concat)
+    print("cov shape and type for all sites ", np.shape(cov),type(cov))
+    print("cov not null ",np.sum(cov!=0))
+    #save covariances array
+    save_pkl(cov, cov_array_file)
+
+
 
 """
 SVM-RBF SHAP VALUES ANALYSIS
@@ -480,8 +757,12 @@ STEP 7 : plot beeswarm plot of shap values in order of highest to lowest mean ab
 """
 
 def main():
-    make_shap_df()
-    # forward_maps_VBMROI()
+    # plot_beeswarm(VBM=True)
+    # read_bootstrapped_shap(save=True,VBM=True)
+    # plot_beeswarm(VBM=True)
+    # plot_glassbrain()
+    # quit()
+    forward_maps_voxelwise()
     quit()
 
     regression_analysis_with_specific_and_suppressor_ROI(plot_and_save_jointplot=True)

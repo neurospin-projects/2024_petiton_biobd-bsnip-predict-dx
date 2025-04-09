@@ -7,15 +7,17 @@ import statsmodels.formula.api as smf
 from statsmodels.stats.multitest import multipletests
 
 from classif_VBMROI import remove_zeros
-from utils import get_participants, get_LOSO_CV_splits_N861
+from utils import get_participants, get_LOSO_CV_splits_N861, get_LOSO_CV_splits_N763
 sys.path.append('/neurospin/psy_sbox/temp_sara/')
 from pylearn_mulm.mulm.residualizer import Residualizer
 
+# inputs
 ROOT="/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/"
 DATAFOLDER=ROOT+"data/processed/"
+# output
 RESULTS_FEATIMPTCE_AND_STATS_DIR=ROOT+"results_feat_imptce_and_univ_stats/"
 
-def get_scaled_data(res="no_res"):
+def get_scaled_data(res="no_res", VBM=False, SBM=False):
     """
         res : (str) "no_res", "res_age_sex", or "res_age_sex_site" --> residualization applied to data 
         Aim : returns a dataframe of all subjects' ROI values, age, sex, site, and diagnosis, after standard scaling 
@@ -23,36 +25,49 @@ def get_scaled_data(res="no_res"):
         can be applied.
     
     """
-    splits = get_LOSO_CV_splits_N861()    
+    assert not (VBM and SBM),"a feature type has to be chosen between VBM ROI and SBM ROI"
+    if VBM : 
+        splits = get_LOSO_CV_splits_N861() 
+        Nmax = 800  # using maximum training set size for dataset with all VBM-preprocessed subjects, N861 
+    if SBM : 
+        splits = get_LOSO_CV_splits_N763()
+        Nmax = 700 # using maximum training set size for dataset with all SBM-preprocessed subjects, N763
+
     assert res in ["res_age_sex_site", "res_age_sex", "no_res"],"not the right residualization option for parameter 'res'!"
     # read participants dataframe
     participants = get_participants()
-    Nmax = 800
+    if VBM : ROIdf = pd.read_csv(DATAFOLDER+"VBMROI_Neuromorphometrics.csv")
+    if SBM : ROIdf = pd.read_csv(DATAFOLDER+"SBMROI_Destrieux_CT_SA_subcortical_N763.csv")
+
     participants_all = list(splits["Baltimore-"+str(Nmax)][0])+list(splits["Baltimore-"+str(Nmax)][1])
     msk = list(participants[participants['participant_id'].isin(participants_all)].index)
-    participants_VBM = participants.iloc[msk]   
-    participants_VBM = participants_VBM.reset_index(drop=True)
+    participants_ROI = participants.iloc[msk]   
+    participants_ROI = participants_ROI.reset_index(drop=True)
 
-    VBMdf = pd.read_csv(DATAFOLDER+"VBMROI_Neuromorphometrics.csv")
-    # reorder VBMdf to have rows in the same order as participants_VBM
-    VBMdf = VBMdf.set_index('participant_id').reindex(participants_VBM["participant_id"].values).reset_index()
+    # reorder ROIdf to have rows in the same order as participants_ROI
+    ROIdf = ROIdf.set_index('participant_id').reindex(participants_ROI["participant_id"].values).reset_index()
 
-    exclude_elements = ['participant_id', 'session', 'TIV', 'CSF_Vol', 'GM_Vol', 'WM_Vol']
-    VBMdf = remove_zeros(VBMdf, verbose=False)
-    VBMdf = VBMdf.drop(columns=exclude_elements)
+    if VBM : 
+        exclude_elements = ['participant_id', 'session', 'TIV', 'CSF_Vol', 'GM_Vol', 'WM_Vol']
+        ROIdf = remove_zeros(ROIdf, verbose=False)
+    if SBM : exclude_elements = ['participant_id', 'TIV']
+    
+    ROIdf = ROIdf.drop(columns=exclude_elements)
 
-    X_arr = VBMdf.values
+    X_arr = ROIdf.values
     print("X_arr ",X_arr.shape, type(X_arr))
+    if VBM : assert X_arr.shape[1]==280, "there should be 280 features for VBM ROI."
+    if SBM : assert X_arr.shape[1]==330, "there should be 330 features for SBM ROI with the Destrieux atlas and subcortical features included."
 
     if res!="no_res":
         if res=="res_age_sex_site": formula = "age + sex + site"
         elif res=="res_age_sex": formula="age + sex"
         residualizer = Residualizer(
-                data=participants_VBM,
+                data=participants_ROI,
                 formula_res=formula,
                 formula_full=formula + " + dx"
             )
-        Zres = residualizer.get_design_mat(participants_VBM)
+        Zres = residualizer.get_design_mat(participants_ROI)
         # fit residualizer
         residualizer.fit(X_arr, Zres)
         X_arr = residualizer.transform(X_arr, Zres)
@@ -60,8 +75,8 @@ def get_scaled_data(res="no_res"):
     # fit scaler
     scaler_ = StandardScaler()
     X_arr = scaler_.fit_transform(X_arr)
-    df_X = pd.DataFrame(X_arr , columns = list(VBMdf.columns))
-    df_X[["age", "sex", "site", "dx"]] = participants_VBM[["age", "sex", "site", "dx"]]
+    df_X = pd.DataFrame(X_arr , columns = list(ROIdf.columns))
+    df_X[["age", "sex", "site", "dx"]] = participants_ROI[["age", "sex", "site", "dx"]]
 
     return df_X
 
@@ -70,30 +85,39 @@ def transform_df(df):
     # being modified to fit statsmodel functions
     original_cols = list(df.columns)
     # Replace +- not alowed in statsmodel formulae
-    df.columns = df.columns.str.replace('-', '_MINUS_') 
-    df.columns = df.columns.str.replace('+', '_PLUS_') 
+    df.columns = df.columns.str.replace('-', '_MINUS_', regex=False) 
+    df.columns = df.columns.str.replace('+', '_PLUS_', regex=False) 
+    df.rename(columns={"3rd_MINUS_Ventricle": "_3rd_MINUS_Ventricle"}, inplace=True) # only in SBM ROI
+    df.rename(columns={"4th_MINUS_Ventricle": "_4th_MINUS_Ventricle"}, inplace=True) # only in SBM ROI
+    df.rename(columns={"5th_MINUS_Ventricle": "_5th_MINUS_Ventricle"}, inplace=True) # only in SBM ROI
+
     new_cols = list(df.columns)
     string_dict = dict(zip(new_cols, original_cols))
     
     return df, string_dict
 
-def perform_tests(res="no_res", save=False):
+def perform_tests(res="res_age_sex_site", save=False, SBM=False, VBM=False):
     """
         res (str) "no_res", "res_age_sex" or "res_age_sex_site" : type of residualization applied to ROI before statistical testing
         save (bool) : save the results in pkl file
     """
+    assert not (VBM and SBM),"a feature type has to be chosen between VBM ROI and SBM ROI"
+    assert res in ["res_age_sex_site", "res_age_sex", "no_res"], f"Wrong residualization variable: {res}"  
 
-    assert res in ["res_age_sex_site", "res_age_sex", "no_res"], f"Wrong residualization variable: {res}"    
-    df_X = get_scaled_data(res=res)
-    df_X.dx.replace({1:'BD', 0:'HC'}, inplace=True)
+    df_X = get_scaled_data(res=res, SBM=SBM, VBM=VBM)
+    df_X.dx.replace({0:'HC',1:'BD'}, inplace=True)
+    print(list(df_X.columns),"\n\n")
     df_X, string_dict = transform_df(df_X)
     
     # Univariate statistics
     stats = list()
     list_rois = [roi for roi in list(df_X.columns) if roi not in  ["age","sex","site","dx"]] 
-    assert  len(list_rois)==280,f"wrong number of ROI in df! :{len(list_rois)}"
+    if VBM : assert  len(list_rois)==280,f"wrong number of ROI in df! :{len(list_rois)}"
+    if SBM : assert  len(list_rois)==330,f"wrong number of ROI in df! :{len(list_rois)}"
+    print(list_rois,"\n\n")
 
     for var_ in list_rois:
+        print(var_)
         # Ordinary Least Squares (OLS) regression is performed for each ROI with diagnosis (dx), sex, age, and site as predictors.
         lm_ = smf.ols('%s ~ dx + sex + age + site' % var_, df_X).fit()
 
@@ -147,11 +171,13 @@ def perform_tests(res="no_res", save=False):
     print(stats[["diag_p","diag_p_anova","diag_pcor_bonferroni","diag_pcor_bonferroni_anova"]])
 
     if save : 
-        stats.to_excel(RESULTS_FEATIMPTCE_AND_STATS_DIR+"statsuniv_rois_"+res+".xlsx", sheet_name='statsuniv_rois_scaled_'+res, index=False)
+        if VBM : stats.to_excel(RESULTS_FEATIMPTCE_AND_STATS_DIR+"statsuniv_rois_"+res+"_VBM_avril25.xlsx", sheet_name='statsuniv_rois_scaled_'+res, index=False)
+        if SBM : stats.to_excel(RESULTS_FEATIMPTCE_AND_STATS_DIR+"statsuniv_rois_"+res+"_SBM_avril25.xlsx", sheet_name='statsuniv_rois_scaled_'+res, index=False)
 
 
 """
-USED FOR FEATURE IMPORTANCE -- USING ONLY VBM ROI FOR N861 and training datasize at maximum training set size N ~ 800
+USED FOR FEATURE IMPORTANCE -- USING VBM ROI FOR N861 and training datasize at maximum training set size N ~ 800
+FOR SBM ROI, using N763 and N ~ 700 
 
 STEP 1: residualize and scale the ROI data for all participants with get_scaled_data()
 STEP 2: fit ordinary least squares for each ROI with smf.ols, fitting ROI ~ dx (diag) + age + sex + site
@@ -168,7 +194,7 @@ with any type of residualization: before correction for multiple tests:  226, af
 def main():
     # perform_tests(res="no_res", save=True)
     # perform_tests(res="res_age_sex", save=True)
-    perform_tests(res="res_age_sex_site", save=True)
+    perform_tests(res="res_age_sex_site", save=True, SBM=True)
 
 
 if __name__ == "__main__":

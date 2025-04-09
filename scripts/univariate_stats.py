@@ -106,7 +106,6 @@ def perform_tests(res="res_age_sex_site", save=False, SBM=False, VBM=False):
 
     df_X = get_scaled_data(res=res, SBM=SBM, VBM=VBM)
     df_X.dx.replace({0:'HC',1:'BD'}, inplace=True)
-    print(list(df_X.columns),"\n\n")
     df_X, string_dict = transform_df(df_X)
     
     # Univariate statistics
@@ -114,10 +113,8 @@ def perform_tests(res="res_age_sex_site", save=False, SBM=False, VBM=False):
     list_rois = [roi for roi in list(df_X.columns) if roi not in  ["age","sex","site","dx"]] 
     if VBM : assert  len(list_rois)==280,f"wrong number of ROI in df! :{len(list_rois)}"
     if SBM : assert  len(list_rois)==330,f"wrong number of ROI in df! :{len(list_rois)}"
-    print(list_rois,"\n\n")
 
     for var_ in list_rois:
-        print(var_)
         # Ordinary Least Squares (OLS) regression is performed for each ROI with diagnosis (dx), sex, age, and site as predictors.
         lm_ = smf.ols('%s ~ dx + sex + age + site' % var_, df_X).fit()
 
@@ -188,13 +185,12 @@ STEP 4: adjust for multiple comparisons with 2 different methods: bonferroni (mo
 STEP 5 : save results dataframe to excel file
 
 number of ROI with pvalues<0.05 for diagnosis,
-with any type of residualization: before correction for multiple tests:  226, after Bonferroni : 120 ROI (after FDR BH: 222)
+VBM with any type of residualization: before correction for multiple tests:  226, after Bonferroni : 120 ROI (after FDR BH: 222)
+SBM with any type of residualization: before correction for multiple tests:  167, after Bonferroni : 68 ROI (after FDR BH: 150)
 
 """
 def main():
-    # perform_tests(res="no_res", save=True)
-    # perform_tests(res="res_age_sex", save=True)
-    perform_tests(res="res_age_sex_site", save=True, SBM=True)
+    perform_tests(res="res_age_sex", save=False, SBM=True)
 
 
 if __name__ == "__main__":

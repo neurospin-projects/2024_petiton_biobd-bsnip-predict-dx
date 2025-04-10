@@ -9,7 +9,7 @@ import shap
 import xml.etree.ElementTree as ET
 import nilearn.plotting as plotting
 from utils import get_predict_sites_list, read_pkl, get_LOSO_CV_splits_N861, get_participants, save_pkl, get_LOSO_CV_splits_N763, \
-compute_covariance, get_reshaped_4D, inverse_transform, round_sci
+compute_covariance, get_reshaped_4D, inverse_transform, round_sci, plot_dendrogram
 from deep_ensemble import get_mean
 from classif_VoxelWiseVBM_ML import get_all_data
 from collections import Counter
@@ -19,6 +19,13 @@ from sklearn.metrics import roc_auc_score, balanced_accuracy_score, recall_score
 from univariate_stats import get_scaled_data
 from sklearn.linear_model import LogisticRegressionCV
 from classif_VBMROI import remove_zeros 
+from sklearn.model_selection import LeaveOneGroupOut
+from sklearn.model_selection import cross_validate
+from sklearn.cluster import FeatureAgglomeration
+from sklearn.pipeline import Pipeline
+from sklearn.svm import SVC
+import matplotlib.patches as patches
+from nilearn import image
 
 
 sys.path.append('/neurospin/psy_sbox/temp_sara/')
@@ -660,7 +667,12 @@ def plot_pca(data):
 
     return pca, data_scaled
 
-def exploratory_analysis(VBM=True, SBM=False): # implemented for VBM ROI only so far
+def exploratory_analysis_part1(VBM=True, SBM=False): # implemented for VBM ROI only so far
+    """
+    Aim : find clusters of ROI describing brain networks by looking at the correlation matrix of specific and suppressor ROI
+            with hierarchical clustering. plot the dendrogram of the clusters and plot the
+            correlation matrix with a heatmap.
+    """
     # get list of overall specific and suppressor ROI (ROIs with mean abs SHAP values that are within the CI for all LOSO-CV folds)
     shared_strings_spec, shared_strings_supp = get_list_specific_supp_ROI(VBM=VBM, SBM=SBM)
     data = get_scaled_data(res="res_age_sex_site",VBM=VBM, SBM=SBM)
@@ -686,12 +698,251 @@ def exploratory_analysis(VBM=True, SBM=False): # implemented for VBM ROI only so
     corr_matrix_supp.columns = new_labels_supp
     corr_matrix_supp.index = new_labels_supp
 
-    # dendro = plot_cluster_abs_corr_mar(corr_matrix_spec)
-    # pca, data_scaled = plot_pca(data[shared_strings_spec])
+    dendro = plot_cluster_abs_corr_mar(corr_matrix_spec)
+    pca, data_scaled = plot_pca(data[shared_strings_spec])
 
     plot_cluster_abs_corr_mar(corr_matrix_supp, str_specific_supp="Suppressor")
     pca, data_scaled = plot_pca(data[shared_strings_supp])
 
+def clf_cv(X, y, groups):
+    svc_pipeline = Pipeline([
+        ('scaler', StandardScaler()), 
+        ('svc', SVC(C=1.0, kernel='rbf', probability=True, class_weight='balanced'))
+    ])
+
+    logo = LeaveOneGroupOut()
+
+    scores_metrics = ["roc_auc", "balanced_accuracy"]  # You can add all the metrics you want to evaluate 
+
+    # Conducting the cross-validation with shuffling of task order within each participant's group
+    results = cross_validate(svc_pipeline, X, y, cv=logo, groups=groups, scoring=scores_metrics, return_train_score=True,
+                            return_estimator=True, n_jobs=len(groups.unique()))
+
+    return(results['test_roc_auc'].mean().item(), results['test_balanced_accuracy'].mean().item())
+
+def fa_clf_cv(X, y, groups, n_clusters, specfific_colnames, others_colnames):
+    """
+        Aim : Performs classification using SVM RBF and VBM ROI with only clusters from agglomerative clustering of specific ROI
+    """
+
+    ss = StandardScaler()
+    ss.set_output(transform="pandas")
+    Xs = ss.fit_transform(X)
+
+    fa = FeatureAgglomeration(n_clusters=int(n_clusters/2), compute_distances=True)
+
+    # Agglomerate specific features
+    fa.set_output(transform="pandas")
+    fa.fit(Xs[specfific_colnames]) #fitting the fa model to the specific ROIs
+    X_as = fa.transform(Xs[specfific_colnames]) # performing feature agglomeration
+
+    # Agglomerate other features
+    fa.fit(Xs[others_colnames])
+    X_ao = fa.transform(Xs[others_colnames])
+    X_ao.columns = [c + '_other' for c in X_ao.columns]
+
+    # Concatenate
+    X_a = pd.concat([X_as, X_ao], axis=1)
+
+    # Predict
+    return clf_cv(X_a, y, groups)
+
+def cluster_features(Xdf, n_clusters):
+    """
+        Does feature agglomeration clustering into n_clusters clusters on Xdf data.
+        details : standardizes Xdf data, clusters the input features in a n_clusters groups using hierarchical feat agglomeration,
+        and returns the trained FeatureAgglomeration model and the ROI-to-cluster mapping.
+
+    """
+    # Scale
+    ss = StandardScaler()
+    ss.set_output(transform="pandas")
+    Xdf = ss.fit_transform(Xdf)
+    #Xdf = pd.DataFrame(X, columns=colnames)
+
+    # setting distance_threshold=0 ensures we compute the full tree.
+    #model = AgglomerativeClustering(distance_threshold=0, n_clusters=4)
+    model = FeatureAgglomeration(n_clusters=n_clusters, compute_distances=True)
+    model.set_output(transform="pandas")
+    model = model.fit(Xdf)
+    # Transforming Xdf into a new DataFrame where each column corresponds to a cluster of features.
+    Xdf_r = model.transform(Xdf)
+    roi_cluster = pd.DataFrame(dict(ROI=Xdf.columns, label=model.labels_))
+
+
+    return model, roi_cluster
+
+def exploratory_analysis_part2(VBM=True, SBM=False): # implemented for VBM ROI only so far
+    """
+        Aim : find how many clusters of specific ROIs + (1 of the rest) are best for classification using the mean of the features within each cluster.
+        Then, describe the ROIs contained in each cluster with a dendrogram and a correlation matrix (heatmap).
+        Finally, plot the mean absolute shap values for each specific ROI and its corresponding cluster in a glassbrain plot.
+
+    """
+  
+    # get list of overall specific and suppressor ROI (ROIs with mean abs SHAP values that are within the CI for all LOSO-CV folds)
+    shared_strings_spec, shared_strings_supp = get_list_specific_supp_ROI(VBM=VBM, SBM=SBM)
+    data = get_scaled_data(res="res_age_sex_site",VBM=VBM, SBM=SBM)
+    list_roi = [roi for roi in list(data.columns) if roi.endswith("_CSF_Vol") or roi.endswith("_GM_Vol")]
+    X = data[list_roi]
+    y = data.dx
+    groups = data.site
+    print("X ",np.shape(X), type(X))
+
+    # run SVM RBF on VBM ROI with LOSO-CV 
+    clf_cv(X, y, groups) # (0.7396840458482318, 0.6760663888907534)
+
+    # Same thing with CSF => -1 ; making sure changing the CSF ROI values to their opposite changes classification performance
+    csf_cols = [col for col in X.columns if 'CSF' in col]
+    X.loc[:, csf_cols] = -1 * X[csf_cols]
+    clf_cv(X, y, groups) # (0.7396840458482318, 0.6760663888907534)
+
+    atlas_df = pd.read_csv(ROOT+"data/atlases/lobes_Neuromorphometrics.csv", sep=';')
+    dict_atlas_roi_names = atlas_df.set_index('ROIabbr')['ROIname'].to_dict()
+    shared_strings_spec, shared_strings_supp = get_list_specific_supp_ROI(VBM=VBM, SBM=SBM)
+
+    fa_clf_cv(X, y, groups, n_clusters=18, specfific_colnames=shared_strings_spec, others_colnames=shared_strings_supp) 
+    # (0.764749790751399, 0.6914362892559843) / 9 specific clusters (32 specific ROIs) (for suppressor ROI, from 27 ROI to 9 clusters)
+
+    results = pd.DataFrame(data=
+        [[n_clusters] + list(fa_clf_cv(X, y, groups, n_clusters=n_clusters,
+                                    specfific_colnames=shared_strings_spec, others_colnames=shared_strings_supp))
+        for n_clusters in range(2, 20, 2)],
+        columns=["n_clusters", "auc", "bacc"])
+
+    print(results.round(3))
+    ax = results.plot(x='n_clusters', y='auc', title="Feature Agglomeration")
+    # Set font sizes
+    ax.title.set_fontsize(20)
+    ax.set_xlabel("n_clusters", fontsize=15)
+    ax.set_ylabel("auc", fontsize=15)
+    ax.tick_params(axis='both', labelsize=15)  # for tick labels
+    ax.legend(fontsize=20)
+
+    # 10 clusters => 5 specific clusters
+    # plt.show()
+
+    # plt.savefig(OUTPUT_BASENAME + "plot_FeatureAgglomeration.pdf")  
+    plt.close()
+    
+
+    #     n_clusters    auc   bacc
+    # 0           2  0.715  0.673
+    # 1           4  0.717  0.667
+    # 2           6  0.767  0.687
+    # 3           8  0.771  0.697
+    # 4          10  0.768  0.684
+    # 5          12  0.771  0.671
+    # 6          14  0.769  0.689
+    # 7          16  0.767  0.676
+    # 8          18  0.765  0.691
+
+    # ********** #
+    n_clusters = 6
+    # ********** #
+    # Multiply CSF feature by -1
+    Xdf = data[shared_strings_spec]
+    csf_cols = [col for col in shared_strings_spec if 'CSF' in col]
+    Xdf.loc[:, csf_cols] = -1 * Xdf[csf_cols]
+    model, roi_cluster = cluster_features(Xdf, n_clusters)
+    print(roi_cluster)
+
+    plt.title('Hierarchical Clustering Dendrogram')
+    # plot the top three levels of the dendrogram
+    dendro = plot_dendrogram(model, color_threshold=8)
+    # dendro["ivl"] gives the leaf labels in the order they appear along the x-axis as strings
+    reorder_idx = np.array([int(idx) for idx in dendro["ivl"]])
+    reorder_columns = Xdf.columns[reorder_idx]
+    print("reorder_columns ",reorder_columns)
+    reorder_columns_label = [dict_atlas_roi_names[name] + '_' + str(clust) for name, clust in
+    zip(reorder_columns, model.labels_[reorder_idx])]
+
+    loc, _ = plt.xticks()
+    plt.xticks(loc, labels=reorder_columns_label)#, rotation=45)
+    # plt.show()
+    plt.close()
+
+    corr_matrix = Xdf[reorder_columns].corr()
+    corr_matrix.columns = corr_matrix.index = reorder_columns_label
+
+    # Plot the clustered heatmap with a colormap optimized for positive values
+    plt.figure(figsize=(8, 6))
+    sns.set_theme(font_scale=0.5)
+    g = sns.heatmap(corr_matrix, fmt=".2f", cmap="Reds", square=True,
+                linewidths=0.5, vmin=0, vmax=1)
+    sns.set_theme(font_scale=1.0)
+    ax = plt.gca()
+    square = patches.Rectangle((0, 0), 1, 2, edgecolor='purple', facecolor='none')
+    ax.add_patch(square)
+
+    plt.xticks(rotation=40, ha='right', fontsize=20)  
+    plt.yticks(fontsize=20)
+    plt.title("Clustered Correlation Matrix Specific VBM ROI (Absolute Values/6 clusters)", fontsize = 20)
+    # Adjust color bar label size
+    colorbar = g.collections[0].colorbar
+    colorbar.ax.tick_params(labelsize=20)  # Adjust colorbar ticks size
+    # plt.show()
+    plt.close()
+
+    # %% Glass brains
+    # Input
+    atlas_nii_filename = "data/atlases/neuromorphometrics.nii"
+    atlas_csv_filename = "data/atlases/lobes_Neuromorphometrics.csv"
+    atlas_nii = nibabel.load(os.path.join(ROOT, atlas_nii_filename))
+    atlas_arr = atlas_nii.get_fdata()
+
+    # get mean absolute SHAP values for specific ROI
+    dict_summary= read_pkl(RESULTS_FEATIMPTCE_AND_STATS_DIR+"ShapSummaryDictionnaryForBeeswarmPlot_VBM.pkl")
+    concatenated_shap_arrays_with_negated_CSF = dict_summary["concatenated_shap_arrays_with_negated_CSF"]
+    sorted_indices_specificROI = dict_summary["sorted_indices_specificROI"]
+    dict_atlas_roi_names = dict_summary["dict_atlas_roi_names"]
+    list_rois = dict_summary["list_rois"]
+
+    mean_abs_specific = np.mean(np.abs(concatenated_shap_arrays_with_negated_CSF[:,sorted_indices_specificROI]),axis=0)
+    assert len(list_rois)==concatenated_shap_arrays_with_negated_CSF.shape[1]
+
+    df_specific_means = pd.DataFrame({
+        'ROI': np.array(list_rois)[sorted_indices_specificROI],
+        'mean_abs_shap': mean_abs_specific
+    })
+    
+    df_specific_means = pd.merge(df_specific_means, roi_cluster, how='left')
+    atlas_df = atlas_df.rename(columns={'ROIabbr': 'ROI'})
+    info = pd.merge(df_specific_means, atlas_df[['ROI', 'ROIname', 'ROIid']], how='left')#, left_on='ROI', right_on='ROIabbr')
+    print(info)
+    path_univ_statistics = RESULTS_FEATIMPTCE_AND_STATS_DIR+"statsuniv_rois_res_age_sex_site_VBM_avril25.xlsx"
+    univ_statistics = pd.read_excel(path_univ_statistics)
+    print(univ_statistics)
+    info = pd.merge(info, univ_statistics[['ROI', 'diag_t']], how='left')
+    print(info)
+
+    vmin = np.min(mean_abs_specific)
+    vmax = np.max(mean_abs_specific)
+
+    for lab in info.label.unique(): # Iterate over cluster
+        df = info[info.label == lab]
+        print(df)
+        
+        clust_arr = np.zeros(atlas_arr.shape)
+        #clust_name = str(int(lab)) + "_" + " ".join([s.replace("_Vol", '').replace("_CSF", '').replace("_GM", '') for s in list(df.ROI)])
+        clust_name = str(int(lab)) + "_" + " ".join([s.replace("_Vol", '') for s in list(df.ROI)])
+        
+        for i in range(df.shape[0]): # Iterate over regions
+
+            roi = df.iloc[i, :]
+            roi_mask = atlas_arr == roi.ROIid
+
+            print(i, roi.ROI, roi_mask.sum(), roi.mean_abs_shap)
+            mult = -1 if 'CSF' in roi.ROI else 1
+            clust_arr[roi_mask] = mult * np.sign(roi.diag_t) * roi.mean_abs_shap
+
+        clust_img = image.new_img_like(atlas_nii, clust_arr)
+
+        plotting.plot_glass_brain(clust_img, title=clust_name, vmax=vmax, colorbar=True, plot_abs=False, symmetric_cbar=True)
+        #plotting.plot_glass_brain(clust_img, title=clust_name, vmin=vmin, vmax=vmax, colorbar=True, plot_abs=False, symmetric_cbar=True)
+        plotting.show()
+        # plt.savefig(OUTPUT_BASENAME + "plot_specific_FeatureAgglomeration_cluster_shapsum=%.3f__%s.pdf" % (df.mean_abs_shap.sum(), clust_name.replace("_CSF", "")))
+        plt.close()
 
 
 
@@ -756,7 +1007,6 @@ def forward_maps_ROI(VBM=False, SBM=False):
     new_dict = {dict_atlas_roi_names.get(k, k): v for k, v in cov_impt.items()}
 
     plot_glassbrain(new_dict, title="VBM ROI with significant covariates obtained with forward maps")
-
 
 def forward_maps_voxelwise(verbose=False, display_plot=False):
     mean_ypred_by_site_dict,  y_true_for_each_site_dict = get_mean(list_models= [1,3,5,7,8], transfer=True, metric = "roc_auc", \
@@ -951,8 +1201,6 @@ def forward_maps_voxelwise(verbose=False, display_plot=False):
             print("top 20 absolute values in cov: ")
             print(df_sorted.head(20))
 
-        
-
 
 
 """
@@ -988,7 +1236,7 @@ def main():
     # quit()
     # forward_maps_voxelwise()
     # quit()
-    exploratory_analysis()
+    exploratory_analysis_part2()
     quit()
 
     regression_analysis_with_specific_and_suppressor_ROI(VBM=True,plot_and_save_jointplot=True, plot_and_save_kde_plot=True)

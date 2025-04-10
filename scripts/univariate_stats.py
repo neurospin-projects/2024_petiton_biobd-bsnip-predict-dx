@@ -189,14 +189,6 @@ VBM with any type of residualization: before correction for multiple tests:  226
 SBM with any type of residualization: before correction for multiple tests:  167, after Bonferroni : 68 ROI (after FDR BH: 150)
 
 
-
-CLUSTERS
-1 --> Occipital-Subcortical network --> visual processing along with subcortical structures that support overall brain function and fluid regulation.
-2 --> Fronto-Insular-Motor Network --> cognitive control, emotional processing, and motor functions.
-3  -> Cingulo-Visual-Subcortical Network : visual processing, emotional regulation, and subcortical functions.
-4 -->  insular-opercular network:  emotional regulation, sensory processing, and language.
-5 --> frontal network : executive control, working memory, decision-making, and cognitive processing.
-6 --> Pallidal Network : motor control, cognition, and emotion regulation.
 """
 def main():
     perform_tests(res="res_age_sex", save=False, VBM=True)

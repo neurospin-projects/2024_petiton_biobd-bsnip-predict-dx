@@ -9,6 +9,9 @@ import pandas as pd
 import nibabel
 from torchvision.transforms.transforms import Compose
 from transforms import Crop, Padding, Normalize
+from scipy.cluster.hierarchy import dendrogram
+import matplotlib.pyplot as plt
+
 
 DATAFOLDER="/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/data/processed/"
 
@@ -191,3 +194,35 @@ def round_sci(x, sig=2):
     if pd.isna(x) or x == 0:
             return str(x)
     return f"{x:.{sig}e}".replace("e+0", "e").replace("e+","e").replace("e0", "e")
+
+
+
+def plot_dendrogram(model, **kwargs):
+    # Create linkage matrix and then plot the dendrogram
+
+    # create the counts of samples under each node
+    counts = np.zeros(model.children_.shape[0])
+    n_samples = len(model.labels_)
+    for i, merge in enumerate(model.children_):
+        current_count = 0
+        for child_idx in merge:
+            if child_idx < n_samples:
+                current_count += 1  # leaf node
+            else:
+                current_count += counts[child_idx - n_samples]
+        counts[i] = current_count
+    #This creates a linkage matrix in the format required by scipy.cluster.hierarchy.dendrogram, where :
+    # each row: [idx1, idx2, distance, count]
+    # idx1 and idx2: clusters merged
+    # distance: the distance between them (from model.distances_)
+    # count: how many original features are in the newly formed cluster
+
+    linkage_matrix = np.column_stack([model.children_, model.distances_,
+                                      counts]).astype(float)
+
+    # Plot the corresponding dendrogram
+    dendro = dendrogram(linkage_matrix, **kwargs)
+    plt.grid(False)
+    plt.xticks(rotation=40, ha='right', fontsize=20) 
+
+    return dendro

@@ -1226,6 +1226,13 @@ STEP 6 : plot regression results based on labels and type of ROI/feature (suppre
 STEP 7 : plot beeswarm plot of shap values in order of highest to lowest mean absolute shap for the ROI that were selected as specific ROI in the 
             previous steps with plot_beeswarm()
 
+CLUSTERS
+1 --> Occipital-Subcortical network --> visual processing along with subcortical structures that support overall brain function and fluid regulation.
+2 --> Fronto-Insular-Motor Network --> cognitive control, emotional processing, and motor functions.
+3  -> Cingulo-Visual-Subcortical Network : visual processing, emotional regulation, and subcortical functions.
+4 -->  insular-opercular network:  emotional regulation, sensory processing, and language.
+5 --> frontal network : executive control, working memory, decision-making, and cognitive processing.
+6 --> Pallidal Network : motor control, cognition, and emotion regulation.
 """
 
 def main():

@@ -19,9 +19,7 @@ from sklearn.metrics import roc_auc_score, balanced_accuracy_score, recall_score
 from univariate_stats import get_scaled_data
 from sklearn.linear_model import LogisticRegressionCV
 from classif_VBMROI import remove_zeros 
-from torchvision.transforms.transforms import Compose
 
-from transforms import Crop, Padding, Normalize
 
 sys.path.append('/neurospin/psy_sbox/temp_sara/')
 from pylearn_mulm.mulm.residualizer import Residualizer
@@ -588,10 +586,11 @@ def regression_analysis_with_specific_and_suppressor_ROI(VBM=False, SBM=False, p
         plt.show()
         plt.close()
 
-def plot_cluster_abs_corr_mar(corr_matrix):
+def plot_cluster_abs_corr_mar(corr_matrix, str_specific_supp="Specific"):
     # [Improve the figure](https://fr.moonbooks.org/Articles/Les-dendrogrammes-avec-Matplotlib/)
     from scipy.cluster.hierarchy import linkage, dendrogram
     fig = plt.figure(figsize=(8, 8))  # Create an 8x8 inch figure
+    
 
     # Apply hierarchical clustering to reorder correlation matrix 
     # clustering based on dissimilarity (1 - correlation)
@@ -599,24 +598,34 @@ def plot_cluster_abs_corr_mar(corr_matrix):
     # if corr = 0, distance = 1
     linkage_matrix = linkage(1 - corr_matrix, method="ward")  # Ward's method for clustering
     
-    #dendro = dendrogram(linkage_matrix, labels=corr_matrix.columns, no_plot=True)
     dendro = dendrogram(linkage_matrix, labels=corr_matrix.columns, no_plot=False)
     plt.grid(False)
+    plt.xticks(rotation=40, ha='right', fontsize=20)  
+    plt.show()  # Show dendrogram window
+
     sorted_columns = dendro["ivl"]  # Reordered column names
 
     # Reordering the matrix based on cluster hierarchy (from dendrogram).
     reordered_corr = corr_matrix.loc[sorted_columns, sorted_columns]
-    print("reordered_corr ",np.unique(reordered_corr), "\n",type(reordered_corr), np.shape(reordered_corr))
 
     # Plot the clustered heatmap with a colormap optimized for positive values
     plt.figure(figsize=(8, 6))
     sns.set_theme(font_scale=0.5)
     g = sns.heatmap(reordered_corr, fmt=".2f", cmap="Reds", square=True,
                 linewidths=0.5, vmin=0, vmax=1)
+    plt.xticks(rotation=40, ha='right', fontsize=20)  
+    plt.xlim(-0.5, len(reordered_corr.columns) - 0.5)  # Shift labels to start more to the left
+    plt.yticks(fontsize=20)
+    plt.title("Clustered Correlation Matrix "+str_specific_supp+" VBM ROI (Absolute Values)", fontsize = 20)
+    # Adjust color bar label size
+    colorbar = g.collections[0].colorbar
+    colorbar.ax.tick_params(labelsize=20)  # Adjust colorbar ticks size
 
-    plt.title("Clustered Correlation Matrix (Absolute Values)")
+    plt.subplots_adjust(left=0.1)  # Adjust to move dendrogram y-ticks left
+
     plt.show()
-    sns.set(font_scale=1.0)
+    sns.set_theme(font_scale=1.0)
+
 
     return dendro
 
@@ -654,18 +663,33 @@ def plot_pca(data):
 def exploratory_analysis(VBM=True, SBM=False): # implemented for VBM ROI only so far
     # get list of overall specific and suppressor ROI (ROIs with mean abs SHAP values that are within the CI for all LOSO-CV folds)
     shared_strings_spec, shared_strings_supp = get_list_specific_supp_ROI(VBM=VBM, SBM=SBM)
-    print(shared_strings_spec)
     data = get_scaled_data(res="res_age_sex_site",VBM=VBM, SBM=SBM)
-    print("data ", type(data), np.shape(data))
-    print(data)
-    quit()
-    # shap_spec = shap_stat[shap_stat.type == "specific"]
-    corr_matrix = data[shared_strings_spec].corr().abs()
+    atlas_df = pd.read_csv(ROOT+"data/atlases/lobes_Neuromorphometrics.csv", sep=';')
+    dict_atlas_roi_names = atlas_df.set_index('ROIabbr')['ROIname'].to_dict()
 
-    dendro = plot_cluster_abs_corr_mar(data[shared_strings_spec].corr().abs())
-    pca, data_scaled = plot_pca(data[shared_strings_spec])
+    def rename_col(col, correspondence_dict):
+        base_name = correspondence_dict.get(col, col)  # Fallback to original name if not in dict
+        if "_GM_Vol" in col:
+            return f"{base_name} GM"
+        elif "_CSF_Vol" in col:
+            return f"{base_name} CSF"
+        else:
+            return base_name
 
-    plot_cluster_abs_corr_mar(data[shared_strings_supp].corr().abs())
+    corr_matrix_spec = data[shared_strings_spec].corr().abs()
+    corr_matrix_supp = data[shared_strings_supp].corr().abs()
+    new_labels_spec = [rename_col(col, dict_atlas_roi_names) for col in corr_matrix_spec.columns]
+    corr_matrix_spec.columns = new_labels_spec
+    corr_matrix_spec.index = new_labels_spec
+
+    new_labels_supp = [rename_col(col, dict_atlas_roi_names) for col in corr_matrix_supp.columns]
+    corr_matrix_supp.columns = new_labels_supp
+    corr_matrix_supp.index = new_labels_supp
+
+    # dendro = plot_cluster_abs_corr_mar(corr_matrix_spec)
+    # pca, data_scaled = plot_pca(data[shared_strings_spec])
+
+    plot_cluster_abs_corr_mar(corr_matrix_supp, str_specific_supp="Suppressor")
     pca, data_scaled = plot_pca(data[shared_strings_supp])
 
 
@@ -764,6 +788,9 @@ def forward_maps_voxelwise(verbose=False, display_plot=False):
         msk = list(participants[participants['participant_id'].isin(participants_all)].index)
         participants_VBM = participants.iloc[msk]   
         participants_VBM = participants_VBM.reset_index(drop=True)
+        
+        from torchvision.transforms.transforms import Compose
+        from transforms import Crop, Padding, Normalize
 
         # transforms applied to images before training the DL models
         input_transforms = Compose([Crop((1, 121, 128, 121)), Padding([1, 128, 128, 128], mode='constant'),  Normalize()])
@@ -961,6 +988,8 @@ def main():
     # quit()
     # forward_maps_voxelwise()
     # quit()
+    exploratory_analysis()
+    quit()
 
     regression_analysis_with_specific_and_suppressor_ROI(VBM=True,plot_and_save_jointplot=True, plot_and_save_kde_plot=True)
     quit()

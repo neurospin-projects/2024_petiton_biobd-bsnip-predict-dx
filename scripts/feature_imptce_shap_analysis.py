@@ -4,6 +4,7 @@ import nibabel
 import pandas as pd
 import seaborn as sns
 import ast, re
+from scipy.cluster.hierarchy import linkage, dendrogram
 import shap
 import xml.etree.ElementTree as ET
 import nilearn.plotting as plotting
@@ -486,18 +487,16 @@ def plot_glassbrain(dict_plot=None, title=""):
         title=title)
     plotting.show()
 
-
-def regression_analysis_with_specific_and_suppressor_ROI(VBM=False, SBM=False, plot_and_save_jointplot=False, plot_and_save_kde_plot=False):
+def get_list_specific_supp_ROI(VBM=False, SBM=False):
     assert not (VBM and SBM),"a feature type has to be chosen between VBM ROI and SBM ROI"
-    #Illustrate Suppressor variable with linear model
-    data = get_scaled_data(res="res_age_sex_site",VBM=VBM, SBM=SBM)
-    print("data ", type(data), np.shape(data))
-    print(data)
+
     specific_ROI={fold:[] for fold in get_predict_sites_list()}
     suppressor_ROI={fold:[] for fold in get_predict_sites_list()}
+    if VBM : str_roi = "SVM_RBF_VBM"
+    if SBM : str_roi = "EN_SBM"
 
     for site in get_predict_sites_list():
-        shap_stat=pd.read_excel(RESULTS_FEATIMPTCE_AND_STATS_DIR+"shap_from_SVM_RBF_VBM_"+site+"-univstat_avril25.xlsx", sheet_name='SHAP_roi_univstat_'+site)
+        shap_stat=pd.read_excel(RESULTS_FEATIMPTCE_AND_STATS_DIR+"shap_from_"+str_roi+"_"+site+"-univstat_avril25.xlsx", sheet_name='SHAP_roi_univstat_'+site)
         # print(shap_stat)
         shap_spec = shap_stat[shap_stat.type=="specific"]
         # print(shap_spec)
@@ -508,6 +507,17 @@ def regression_analysis_with_specific_and_suppressor_ROI(VBM=False, SBM=False, p
     # get list of overall specific and suppressor ROI (ROIs with mean abs SHAP values that are within the CI for all LOSO-CV folds)
     shared_strings_spec = list(get_shared_specific_or_suppressor_ROIs_btw_folds(specific_ROI))
     shared_strings_supp = list(get_shared_specific_or_suppressor_ROIs_btw_folds(suppressor_ROI))
+    return shared_strings_spec, shared_strings_supp
+
+def regression_analysis_with_specific_and_suppressor_ROI(VBM=False, SBM=False, plot_and_save_jointplot=False, plot_and_save_kde_plot=False):
+    assert not (VBM and SBM),"a feature type has to be chosen between VBM ROI and SBM ROI"
+    #Illustrate Suppressor variable with linear model
+    data = get_scaled_data(res="res_age_sex_site",VBM=VBM, SBM=SBM)
+    print("data ", type(data), np.shape(data))
+    print(data)
+   
+    # get list of overall specific and suppressor ROI (ROIs with mean abs SHAP values that are within the CI for all LOSO-CV folds)
+    shared_strings_spec, shared_strings_supp = get_list_specific_supp_ROI(VBM=VBM, SBM=SBM)
 
     print("number of specific ROI ", len(shared_strings_spec), "number of suppressor ROI ", len(shared_strings_supp))
 
@@ -577,6 +587,88 @@ def regression_analysis_with_specific_and_suppressor_ROI(VBM=False, SBM=False, p
         plt.savefig(RESULTS_FEATIMPTCE_AND_STATS_DIR + "plot_suppressor-specific_density.pdf")  
         plt.show()
         plt.close()
+
+def plot_cluster_abs_corr_mar(corr_matrix):
+    # [Improve the figure](https://fr.moonbooks.org/Articles/Les-dendrogrammes-avec-Matplotlib/)
+    from scipy.cluster.hierarchy import linkage, dendrogram
+    fig = plt.figure(figsize=(8, 8))  # Create an 8x8 inch figure
+
+    # Apply hierarchical clustering to reorder correlation matrix 
+    # clustering based on dissimilarity (1 - correlation)
+    # if corr= 1, that means identical --> distance = 0
+    # if corr = 0, distance = 1
+    linkage_matrix = linkage(1 - corr_matrix, method="ward")  # Ward's method for clustering
+    
+    #dendro = dendrogram(linkage_matrix, labels=corr_matrix.columns, no_plot=True)
+    dendro = dendrogram(linkage_matrix, labels=corr_matrix.columns, no_plot=False)
+    plt.grid(False)
+    sorted_columns = dendro["ivl"]  # Reordered column names
+
+    # Reordering the matrix based on cluster hierarchy (from dendrogram).
+    reordered_corr = corr_matrix.loc[sorted_columns, sorted_columns]
+    print("reordered_corr ",np.unique(reordered_corr), "\n",type(reordered_corr), np.shape(reordered_corr))
+
+    # Plot the clustered heatmap with a colormap optimized for positive values
+    plt.figure(figsize=(8, 6))
+    sns.set_theme(font_scale=0.5)
+    g = sns.heatmap(reordered_corr, fmt=".2f", cmap="Reds", square=True,
+                linewidths=0.5, vmin=0, vmax=1)
+
+    plt.title("Clustered Correlation Matrix (Absolute Values)")
+    plt.show()
+    sns.set(font_scale=1.0)
+
+    return dendro
+
+def plot_pca(data):
+    """
+    Aim : performing Principal Component Analysis (PCA) and plotting the cumulative variance explained by the components
+    """
+
+    # Standardize the data (important for PCA)
+    from sklearn.decomposition import PCA
+    from sklearn.preprocessing import StandardScaler
+
+    scaler = StandardScaler()
+    data_scaled = scaler.fit_transform(data)
+
+    # Perform PCA
+    pca = PCA()
+    pca.fit(data_scaled)
+
+    # Compute cumulative explained variance = how much total variance is explained as you add more components.
+    explained_variance = np.cumsum(pca.explained_variance_ratio_)
+
+    # Plot explained variance
+    # Plots the cumulative variance curve: tells you how many components you need to explain most of the variance.
+    plt.figure(figsize=(8, 5))
+    plt.plot(range(1, len(explained_variance) + 1), explained_variance, marker='o', linestyle='--', color='b')
+    plt.xlabel('Number of Principal Components')
+    plt.ylabel('Cumulative Explained Variance')
+    plt.title('Explained Variance by Number of Components')
+    plt.grid(True)
+    plt.show()
+
+    return pca, data_scaled
+
+def exploratory_analysis(VBM=True, SBM=False): # implemented for VBM ROI only so far
+    # get list of overall specific and suppressor ROI (ROIs with mean abs SHAP values that are within the CI for all LOSO-CV folds)
+    shared_strings_spec, shared_strings_supp = get_list_specific_supp_ROI(VBM=VBM, SBM=SBM)
+    print(shared_strings_spec)
+    data = get_scaled_data(res="res_age_sex_site",VBM=VBM, SBM=SBM)
+    print("data ", type(data), np.shape(data))
+    print(data)
+    quit()
+    # shap_spec = shap_stat[shap_stat.type == "specific"]
+    corr_matrix = data[shared_strings_spec].corr().abs()
+
+    dendro = plot_cluster_abs_corr_mar(data[shared_strings_spec].corr().abs())
+    pca, data_scaled = plot_pca(data[shared_strings_spec])
+
+    plot_cluster_abs_corr_mar(data[shared_strings_supp].corr().abs())
+    pca, data_scaled = plot_pca(data[shared_strings_supp])
+
+
 
 
 def forward_maps_ROI(VBM=False, SBM=False):

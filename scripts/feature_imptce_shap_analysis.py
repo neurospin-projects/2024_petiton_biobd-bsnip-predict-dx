@@ -3,13 +3,12 @@ import numpy as np
 import nibabel
 import pandas as pd
 import seaborn as sns
-import nibabel as nib
 import ast, re
 import shap
 import xml.etree.ElementTree as ET
 import nilearn.plotting as plotting
 from utils import get_predict_sites_list, read_pkl, get_LOSO_CV_splits_N861, get_participants, save_pkl, get_LOSO_CV_splits_N763, \
-compute_covariance, get_reshaped_4D
+compute_covariance, get_reshaped_4D, inverse_transform, round_sci
 from deep_ensemble import get_mean
 from classif_VoxelWiseVBM_ML import get_all_data
 from collections import Counter
@@ -36,7 +35,7 @@ MASK_FILE ="/neurospin/psy_sbox/analyses/201906_schizconnect-vip-prague-bsnip-bi
 
 # outputs
 RESULTS_FEATIMPTCE_AND_STATS_DIR=ROOT+"results_feat_imptce_and_univ_stats/"
-
+# /neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/results_feat_imptce_and_univ_stats/specific_ROI_SHAP_SVMRBF_VBM.xlsx
 
 def make_shap_df(verbose=False, VBM=False, SBM=False):
     assert not (VBM and SBM),"a feature type has to be chosen between VBM ROI and SBM ROI"
@@ -401,11 +400,11 @@ def plot_beeswarm(VBM=False, SBM=False):
     if VBM : mean_abs_specific = np.mean(np.abs(concatenated_shap_arrays_with_negated_CSF[:,sorted_indices_specificROI]),axis=0)
 
     # SHAP summary plot
-    if VBM : shap.summary_plot(concatenated_shap_arrays_with_negated_CSF[:,sorted_indices_specificROI], all_folds_Xtest_concatenated[:,sorted_indices_specificROI], \
-                      feature_names=[dict_atlas_roi_names[list_rois[i]] for i in sorted_indices_specificROI], max_display=len(sorted_indices_specificROI))
+    # if VBM : shap.summary_plot(concatenated_shap_arrays_with_negated_CSF[:,sorted_indices_specificROI], all_folds_Xtest_concatenated[:,sorted_indices_specificROI], \
+    #                   feature_names=[dict_atlas_roi_names[list_rois[i]] for i in sorted_indices_specificROI], max_display=len(sorted_indices_specificROI))
    
-    if SBM : shap.summary_plot(concatenated_shap_arrays[:,sorted_indices_specificROI], all_folds_Xtest_concatenated[:,sorted_indices_specificROI], \
-                      feature_names=[list_rois[i] for i in sorted_indices_specificROI], max_display=len(sorted_indices_specificROI))
+    # if SBM : shap.summary_plot(concatenated_shap_arrays[:,sorted_indices_specificROI], all_folds_Xtest_concatenated[:,sorted_indices_specificROI], \
+    #                   feature_names=[list_rois[i] for i in sorted_indices_specificROI], max_display=len(sorted_indices_specificROI))
    
     print("Sorted ROI (highest to lowest mean_abs):", [list_rois[i] for i in sorted_indices_specificROI])
     # get univariate statistics (obtained with univariate_stats.py)
@@ -414,11 +413,15 @@ def plot_beeswarm(VBM=False, SBM=False):
     stats_specific_ROI = univ_statistics[univ_statistics["ROI"].isin([list_rois[i] for i in sorted_indices_specificROI])].copy()
     recap = stats_specific_ROI[stats_specific_ROI["diag_pcor_bonferroni"] < 0.05][["ROI", "diag_pcor_bonferroni"]]
     recap["mean_abs_shap"] = np.round(mean_abs_specific,4)
+    recap['diag_pcor_bonferroni'] = recap['diag_pcor_bonferroni'].apply(lambda x: round_sci(x, sig=2))
 
     if VBM : 
         recap["ROI"] = recap['ROI'].replace(dict_atlas_roi_names)
         save_pkl(recap, RESULTS_FEATIMPTCE_AND_STATS_DIR+"specific_ROI_SHAP_SVMRBF_VBM.pkl")
-    if SBM : save_pkl(recap, RESULTS_FEATIMPTCE_AND_STATS_DIR+"specific_ROI_SHAP_EN_SBM.pkl")
+        recap.to_excel(RESULTS_FEATIMPTCE_AND_STATS_DIR+"specific_ROI_SHAP_SVMRBF_VBM.xlsx", sheet_name='specificROI_SHAP_SVMRBF_VBM_AVRIL25', index=False)
+    if SBM : 
+        save_pkl(recap, RESULTS_FEATIMPTCE_AND_STATS_DIR+"specific_ROI_SHAP_EN_SBM.pkl")
+        recap.to_excel(RESULTS_FEATIMPTCE_AND_STATS_DIR+"specific_ROI_SHAP_EN_SBM.xlsx", sheet_name='specificROI_SHAP_EN_SBM_AVRIL25', index=False)
 
     print("p-values after bonferroni correction and mean abs shap values for specific ROIs :\n", recap)
 
@@ -428,6 +431,7 @@ def plot_glassbrain(dict_plot=None, title=""):
         Aim : plot glassbrain of specfic ROI from SHAP values obtained with an SVM-RBF and VBM ROI features
     """
     if dict_plot is None:
+        glassbrain_VBM_SHAP_analysis = True
         specific_roi_df = read_pkl(RESULTS_FEATIMPTCE_AND_STATS_DIR+"specific_ROI_SHAP_SVMRBF_VBM.pkl")
         dict_plot = specific_roi_df.set_index('ROI')['mean_abs_shap'].to_dict()
         print(specific_roi_df)
@@ -453,7 +457,11 @@ def plot_glassbrain(dict_plot=None, title=""):
             else : baseid = int_list[0]
         else : baseid = int_list[0]
 
-        if dict_plot is None:
+        if glassbrain_VBM_SHAP_analysis:
+            # we know from the glassbrain plot that in the case of VBM ROI (SHAP value analysis), the ROIs for which
+            # a higher GM vol is associated with a higher SHAP value are only the left and right pallidum, so we "paint"
+            # them red in the glassbrain (keep the values positive (they're absolute values so all positive in dict_plot)), 
+            # while we "paint" the others in blue (multiply the absolute values by -1, making them all negative)
             if name in ["Left Pallidum", "Right Pallidum"]: texture_arr[ref_arr == baseid] = val
             else : texture_arr[ref_arr == baseid] = - val
         else : texture_arr[ref_arr == baseid] = val
@@ -479,16 +487,17 @@ def plot_glassbrain(dict_plot=None, title=""):
     plotting.show()
 
 
-def regression_analysis_with_specific_and_suppressor_ROI(plot_and_save_jointplot=False,plot_and_save_kde_plot=False):
+def regression_analysis_with_specific_and_suppressor_ROI(VBM=False, SBM=False, plot_and_save_jointplot=False, plot_and_save_kde_plot=False):
+    assert not (VBM and SBM),"a feature type has to be chosen between VBM ROI and SBM ROI"
     #Illustrate Suppressor variable with linear model
-    data = get_scaled_data(res="res_age_sex_site")
+    data = get_scaled_data(res="res_age_sex_site",VBM=VBM, SBM=SBM)
     print("data ", type(data), np.shape(data))
     print(data)
     specific_ROI={fold:[] for fold in get_predict_sites_list()}
     suppressor_ROI={fold:[] for fold in get_predict_sites_list()}
 
     for site in get_predict_sites_list():
-        shap_stat=pd.read_excel(RESULTS_FEATIMPTCE_AND_STATS_DIR+"shap_from_SVM_RBF_"+site+"-univstat.xlsx", sheet_name='SHAP_roi_univstat_'+site)
+        shap_stat=pd.read_excel(RESULTS_FEATIMPTCE_AND_STATS_DIR+"shap_from_SVM_RBF_VBM_"+site+"-univstat_avril25.xlsx", sheet_name='SHAP_roi_univstat_'+site)
         # print(shap_stat)
         shap_spec = shap_stat[shap_stat.type=="specific"]
         # print(shap_spec)
@@ -504,8 +513,6 @@ def regression_analysis_with_specific_and_suppressor_ROI(plot_and_save_jointplot
 
     X = data[shared_strings_spec + shared_strings_supp]
     print("X ", np.shape(X), type(X))
-    # rename dx values from 0 and 1 to HC and BD respectively
-    data.dx.replace({1:'BD', 0:'HC'}, inplace=True)
     y = data.dx
 
     scaler = StandardScaler()
@@ -515,6 +522,7 @@ def regression_analysis_with_specific_and_suppressor_ROI(plot_and_save_jointplot
     lr.fit(X_scaled, y)
     assert lr.coef_.shape[1] == len(shared_strings_spec) + len(shared_strings_supp)
 
+    # get coefficients
     coef_spec = lr.coef_[0, :len(shared_strings_spec)] # coefficients of specific ROI
     coef_supr = lr.coef_[0, len(shared_strings_spec):] # coefficients of specific ROI
 
@@ -527,8 +535,8 @@ def regression_analysis_with_specific_and_suppressor_ROI(plot_and_save_jointplot
     score_supr_auc = roc_auc_score(y, score_supr)
     score_tot_auc = roc_auc_score(y, score_tot)
 
-    df = pd.DataFrame(dict(diagnosis=data.dx, score_spec=score_spec,
-                       score_supr=score_supr, score_tot=score_tot))
+    df = pd.DataFrame(dict(diagnosis=y.map({0: "HC", 1: "BD"}),  # mapped for plotting only
+                           score_spec=score_spec, score_supr=score_supr, score_tot=score_tot))
     
     print(df)
     
@@ -574,6 +582,7 @@ def regression_analysis_with_specific_and_suppressor_ROI(plot_and_save_jointplot
 def forward_maps_ROI(VBM=False, SBM=False):
     # Read classification scores
     if VBM : scores_path = ROOT+"results_classif/stacking/SVMRBF_VBMROI/scores_tr_te_N861_train_size_N800.pkl"
+    if SBM : scores_path = ROOT+"results_classif/stacking/EN_SBMROI/scores_tr_te_N763_train_size_N700.pkl"
     scores = read_pkl(scores_path)
     concatenated_scores , concatenated_ids = [], []
     for site in get_predict_sites_list():
@@ -633,101 +642,197 @@ def forward_maps_ROI(VBM=False, SBM=False):
     plot_glassbrain(new_dict, title="VBM ROI with significant covariates obtained with forward maps")
 
 
-def forward_maps_voxelwise():
+def forward_maps_voxelwise(verbose=False, display_plot=False):
     mean_ypred_by_site_dict,  y_true_for_each_site_dict = get_mean(list_models= [1,3,5,7,8], transfer=True, metric = "roc_auc", \
              verbose=False, test = True, train=False, model ="densenet")
     print(type(mean_ypred_by_site_dict), np.shape(mean_ypred_by_site_dict), mean_ypred_by_site_dict.keys())
     print(type(mean_ypred_by_site_dict["Baltimore"]))
 
     cov_array_file = RESULTS_FEATIMPTCE_AND_STATS_DIR+"voxelwise_covariances_array.pkl" 
+    temporary_brain_mask_file = RESULTS_FEATIMPTCE_AND_STATS_DIR+"brain_mask_np_with_transforms.pkl"
 
-    total = 0
-    scores_concat = []
-    for site in get_predict_sites_list():
-        total+=len(mean_ypred_by_site_dict[site])
-        scores_concat.append(mean_ypred_by_site_dict[site])
+    if not (os.path.exists(cov_array_file) and os.path.exists(temporary_brain_mask_file)):
+        total = 0
+        scores_concat = []
+        for site in get_predict_sites_list():
+            total+=len(mean_ypred_by_site_dict[site])
+            scores_concat.append(mean_ypred_by_site_dict[site])
 
-    scores_concat = np.concatenate(scores_concat,axis=0)
-    print("shape scores_concat", np.shape(scores_concat), type(scores_concat))
-    print("total ", total)
+        scores_concat = np.concatenate(scores_concat,axis=0)
+        assert total==861, "wrong number of total subjects"
 
-    df_Xim_all = get_all_data(verbose=False)
-    #######
+        df_Xim_all = get_all_data(verbose=False)
 
+        participants = get_participants()
+        print("np.shape participants",np.shape(participants))
+        splits = get_LOSO_CV_splits_N861()    
+        # select the participants for VBM ROI (train+test participants of any of the 12 splits)
+        # it has to be for max training set size, otherwise it won't cover the whole range of subjects
+        participants_all = list(splits["Baltimore-"+str(800)][0])+list(splits["Baltimore-"+str(800)][1])
+        msk = list(participants[participants['participant_id'].isin(participants_all)].index)
+        participants_VBM = participants.iloc[msk]   
+        participants_VBM = participants_VBM.reset_index(drop=True)
 
-    participants = get_participants()
-    print("np.shape participants",np.shape(participants))
-    splits = get_LOSO_CV_splits_N861()    
-    # select the participants for VBM ROI (train+test participants of any of the 12 splits)
-    # it has to be for max training set size, otherwise it won't cover the whole range of subjects
-    participants_all = list(splits["Baltimore-"+str(800)][0])+list(splits["Baltimore-"+str(800)][1])
-    msk = list(participants[participants['participant_id'].isin(participants_all)].index)
-    participants_VBM = participants.iloc[msk]   
-    participants_VBM = participants_VBM.reset_index(drop=True)
+        # transforms applied to images before training the DL models
+        input_transforms = Compose([Crop((1, 121, 128, 121)), Padding([1, 128, 128, 128], mode='constant'),  Normalize()])
+        input_transformsmask = Compose([Crop((1, 121, 128, 121)), Padding([1, 128, 128, 128], mode='constant')])
 
-    # transforms applied to images before training the DL models
-    input_transforms = Compose([Crop((1, 121, 128, 121)), Padding([1, 128, 128, 128], mode='constant'),  Normalize()])
-    input_transformsmask = Compose([Crop((1, 121, 128, 121)), Padding([1, 128, 128, 128], mode='constant')])
+        # reorder voxelwiseVBMdf to have rows in the same order as participants_VBM
+        voxelwiseVBMdf = df_Xim_all.set_index('participant_id').reindex(participants_VBM["participant_id"].values).copy().reset_index()
+        concatenated_Xte = []
+        # get training and testing ROI dataframes (contains participant_id + TIV in addition to 330 ROIs)
+        for site in get_predict_sites_list():
+            df_te_ = voxelwiseVBMdf[voxelwiseVBMdf["participant_id"].isin(splits[site+"-"+str(800)][1])]
+            y_test = pd.merge(df_te_, participants_VBM, on ="participant_id")["dx"].values
+            assert (np.array_equal(y_test, y_true_for_each_site_dict[site])), "error in the data!"
+            df_te_ = df_te_.drop(columns="participant_id")
+            X_test = np.vstack(df_te_["data"].values) 
+            assert np.shape(X_test)[1]==331695
+            print("X_test shape ",np.shape(X_test))
 
+            data = get_reshaped_4D(X_test, MASK_FILE)
+            data = np.reshape(data, (data.shape[0], 1, *data.shape[1:]))
+            print(np.shape(data), type(data))
+            
+            mask_img = nibabel.load(MASK_FILE)
+            mask_data = mask_img.get_fdata() # contains only 0 and 1 (binary mask), shape (121,145,121)
+            if verbose:
+                print(np.sum(mask_data==0))
+                print(np.sum(mask_data==1))
+            # apply transforms to mask (for future plotting)
+            mask_data = mask_data.reshape(1, *mask_data.shape)
+            print("mask_data ",np.shape(mask_data), type(mask_data))
+            # apply transforms to mask
+            mask_data = input_transformsmask(mask_data).squeeze()
+            print("mask_data ",np.shape(mask_data), type(mask_data))
+            save_pkl(mask_data, temporary_brain_mask_file)
 
-    # reorder voxelwiseVBMdf to have rows in the same order as participants_VBM
-    voxelwiseVBMdf = df_Xim_all.set_index('participant_id').reindex(participants_VBM["participant_id"].values).copy().reset_index()
-    concatenated_Xte = []
-    # get training and testing ROI dataframes (contains participant_id + TIV in addition to 330 ROIs)
-    for site in get_predict_sites_list():
-        df_te_ = voxelwiseVBMdf[voxelwiseVBMdf["participant_id"].isin(splits[site+"-"+str(800)][1])]
-        y_test = pd.merge(df_te_, participants_VBM, on ="participant_id")["dx"].values
-        print(np.array_equal(y_test,y_true_for_each_site_dict[site]))
-        # drop participant_ids
-        df_te_ = df_te_.drop(columns="participant_id")
-        X_test = np.vstack(df_te_["data"].values) 
-        assert np.shape(X_test)[1]==331695
-        print("X_test shape ",np.shape(X_test))
+            list_Ximte=[]
+            # loop through test subjects of current fold
+            for subject in range(0,len(data)):
+                print(site, "  ",subject,"/",len(data))
+                if verbose: print("shape subject ",np.shape(data[subject]), type(data[subject]))
+                # apply transforms
+                sub_3D = input_transforms(data[subject]).squeeze()
+                if verbose: print("shape after transforms :",np.shape(sub_3D), type(sub_3D))
+                sub_3Dflat = sub_3D.flatten()
+                print("sub_3Dflat ",np.shape(sub_3Dflat))
+                assert sub_3Dflat.shape == (2097152,)
+                list_Ximte.append(sub_3Dflat)
 
-        data = get_reshaped_4D(X_test, MASK_FILE)
-        data = np.reshape(data, (data.shape[0], 1, *data.shape[1:]))
-        print(np.shape(data), type(data))
-        
+            list_Ximte = np.array(list_Ximte)
+            concatenated_Xte.append(list_Ximte)
+            
+        concatenated_Xte = np.concatenate(concatenated_Xte, axis=0)
+        print("concatenated_Xte ",np.shape(concatenated_Xte), type(concatenated_Xte))
+        # compute covariances
+        cov = compute_covariance(concatenated_Xte, scores_concat)
+        print("cov shape and type for all sites ", np.shape(cov),type(cov))
+        print("cov not null ",np.sum(cov!=0))
+        #save covariances array
+        save_pkl(cov, cov_array_file)
+    else : 
+        image_cov_path = RESULTS_FEATIMPTCE_AND_STATS_DIR+"forward_maps_voxelwise.nii.gz"
         mask_img = nibabel.load(MASK_FILE)
-        mask_data = mask_img.get_fdata()
-        print("mask img", np.shape(mask_img), type(mask_img))
-        print("mask_data ",np.shape(mask_data), type(mask_data))
-        print("unique mask ",np.unique(mask_data))
+        if not os.path.exists(image_cov_path):
+            cov = read_pkl(cov_array_file)
+            mask_data = read_pkl(temporary_brain_mask_file)
+            mask_data_flat = mask_data.flatten()
 
-        print(np.sum(mask_data==0))
-        print(np.sum(mask_data==1))
-        mask_data = mask_data.reshape(1, *mask_data.shape)
-        print("mask_data ",np.shape(mask_data), type(mask_data))
-        # apply transforms
-        mask_data = input_transformsmask(mask_data).squeeze()
-        print("mask_data ",np.shape(mask_data), type(mask_data))
+            mask_data_flat[mask_data_flat==1] = cov[mask_data_flat==1]
+            print(np.shape(mask_data_flat), type(mask_data_flat))
+            reshaped_img = mask_data_flat.reshape(*mask_data.shape)
+            print(np.shape(reshaped_img), type(reshaped_img))
 
-        list_Ximte=[]
-        # loop through test subjects of current fold
-        for subject in range(0,len(data)):
-            print(subject,"/",len(data))
-            print("np.shape data[subject] ",np.shape(data[subject]), type(data[subject]))
+            new_img = nibabel.Nifti1Image(reshaped_img, mask_img.affine)
+            print(np.shape(new_img), type(new_img))
+            # invert transforms (except for normalization since we don't need it here)
+            inverted_array = inverse_transform(reshaped_img)
+            print(np.shape(inverted_array), type(inverted_array))
+            new_img = nibabel.Nifti1Image(inverted_array, mask_img.affine)
 
-            sub_3D = input_transforms(data[subject]).squeeze()
-            print(np.shape(sub_3D), type(sub_3D))
-            sub_3Dflat = sub_3D.flatten()
-            assert sub_3Dflat.shape == (2097152,)
-            sub_3Dflat = data[subject].squeeze().flatten()
+            print(np.shape(new_img), type(new_img))
+            nibabel.save(new_img, image_cov_path)
+        else : 
+            image = nibabel.load(image_cov_path)
+            data = image.get_fdata()
+            mask_data = mask_img.get_fdata()
+            flatdata = data.flatten()
+            maskflat = mask_data.flatten()
+            data_masked=flatdata[maskflat==1]
+            print("np.percentile(np.abs(data_masked), 90) ",np.percentile(np.abs(data_masked), 90))
+            print("np.percentile(np.abs(data_masked), 95) ",np.percentile(np.abs(data_masked), 95))
 
-            print(np.shape(sub_3Dflat), type(sub_3Dflat))
-            list_Ximte.append(sub_3Dflat)
-        list_Ximte = np.array(list_Ximte)
-        print(np.shape(list_Ximte))            
-        concatenated_Xte.append(list_Ximte)
+
+            if display_plot: 
+                plotting.plot_glass_brain(
+                    image,
+                    display_mode="ortho",
+                    colorbar=True,
+                    cmap = plt.cm.coolwarm,
+                    plot_abs=False ,
+                    alpha = 0.95 ,
+                    threshold=np.percentile(np.abs(data_masked), 95),
+                    title="covariances of forward models for voxel-wise images using 5-DE TL")
+                plotting.show()
+
+
+            # Get the ROI of Neuromorphometrics with highest covariances within the voxel-wise image
+            tree = ET.parse(VBMLOOKUP_FILE)
+            root = tree.getroot()
+            labels_to_index_roi = {}
+            index_to_label_roi = {}
+            # Find the 'data' section where ROI labels and their indices are stored
+            data_section = root.find('data')
+            # Iterate through each 'label' element within the 'data' section
+            for label in data_section.findall('label'):
+                index = label.find('index').text  # Get the text of the 'index' element
+                name = label.find('name').text    # Get the text of the 'name' element
+                labels_to_index_roi[name] = int(index)         # Add to dictionary
+                index_to_label_roi[int(index)]=name
+            # print(labels_to_index_roi)
+            # neuromorphometrics vol file read
+            ref_im = nibabel.load(VOL_FILE_VBM)
+            ref_arr = np.array(ref_im.get_fdata())
+            img_array = np.array(image.get_fdata())
+            print(type(image))
+            print(type(img_array), np.shape(img_array))
+
+            # we set to zero all voxels under the threshold
+            img_array[np.abs(img_array) < np.percentile(np.abs(data_masked), 95)] = 0
+            
+            labels = list(set(labels_to_index_roi.values()))
+            print("there are ",len(labels), " labels")
+
+            data = {"name": [], "cov": [], "ratio": [], "nb_voxels":[], "percentage_pos": [], "percentage_neg": []}
+            for label in labels:
+                # Find coordinates of all points in the reference array (MNI space) that match 'label'
+                points_ref = np.asarray(np.where(ref_arr == label)).T
+                # mean of voxels for current subject within one ROI
+                gm_data = np.asarray([img_array[loc[0], loc[1], loc[2]] for loc in points_ref])
+                ratio = np.count_nonzero(gm_data) * 100 / len(gm_data)
+                gm_data[gm_data == 0] = np.nan
+                # do not include ROI that have only 0 as covariates of their composing voxels
+                all_nan = np.isnan(gm_data).all()
+                if not all_nan: 
+                    gm = np.nanmean(np.abs(gm_data))
+                    percen_pos = 100*np.sum(gm_data[~np.isnan(gm_data)]>0)/(np.sum(gm_data[~np.isnan(gm_data)]>0)+np.sum(gm_data[~np.isnan(gm_data)]<0))
+                    percen_neg = 100*np.sum(gm_data[~np.isnan(gm_data)]<0)/(np.sum(gm_data[~np.isnan(gm_data)]>0)+np.sum(gm_data[~np.isnan(gm_data)]<0))
+                    data["name"].append(index_to_label_roi[label])
+                    if percen_neg>percen_pos  : gm = -gm
+                    data["cov"].append(gm)
+                    data["ratio"].append(ratio)
+                    data["nb_voxels"].append(len(gm_data[~np.isnan(gm_data)]))
+                    data["percentage_pos"].append(percen_pos)
+                    data["percentage_neg"].append(percen_neg)
+
+            df = pd.DataFrame.from_dict(data)
+            print(df)
+            df_sorted = df.loc[df['cov'].abs().sort_values(ascending=False).index]
+            print("top 20 absolute values in cov: ")
+            print(df_sorted.head(20))
+
         
-    concatenated_Xte = np.concatenate(concatenated_Xte, axis=0)
-    print("concatenated_Xte ",np.shape(concatenated_Xte), type(concatenated_Xte))
-    # compute covariances
-    cov = compute_covariance(concatenated_Xte, scores_concat)
-    print("cov shape and type for all sites ", np.shape(cov),type(cov))
-    print("cov not null ",np.sum(cov!=0))
-    #save covariances array
-    save_pkl(cov, cov_array_file)
 
 
 
@@ -762,10 +867,10 @@ def main():
     # plot_beeswarm(VBM=True)
     # plot_glassbrain()
     # quit()
-    forward_maps_voxelwise()
-    quit()
+    # forward_maps_voxelwise()
+    # quit()
 
-    regression_analysis_with_specific_and_suppressor_ROI(plot_and_save_jointplot=True)
+    regression_analysis_with_specific_and_suppressor_ROI(VBM=True,plot_and_save_jointplot=True, plot_and_save_kde_plot=True)
     quit()
     plot_beeswarm()
     plot_glassbrain()

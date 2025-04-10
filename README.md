@@ -1,6 +1,16 @@
 # 2024_petiton_biobd-bsnip-predict-dx
 Prediction of DX (Bipolar Disorder vs Healthy Controls) using Anatomical MRI
 
+## classification
+### VBM ROI (voxel-based morphometry, Neuromorphometrics atlas)
+### SBM ROI (surface-based morphometry, Desikan or Destrieux atlases)
+### z-scores from Normative Models
+### VBM voxel-wise 
+#### ML
+#### DL (RI-DL, TL, DE)
+
+
+
 ## feature importance - feature_imptce_shap_analysis.py
 
 - For **VBM ROI** features, we use SHAP values evaluated during the training of the best-performing model for this type of feature, the **SVM-RBF** (support vector machine with RBF kernel).
@@ -35,7 +45,7 @@ print(f"The function took {hours}h {minutes}m {seconds}s to run.")
 ```
 - For **VBM ROI**, run : 
 ```python
-# for random permutations 
+# with random permutations 
 from utils import get_predict_sites_list 
 start_time = time.time()
 for onesite_ in get_predict_sites_list(): # or run each LOSO CV site/fold separately (about 2h computation type by fold)
@@ -63,6 +73,9 @@ dataframe in a xlsx file containing a summary of the relationships between age, 
 
 ### SHAP analysis
 - Create a dataframe with shap values and their means (the mean values for each ROI between all test set subjects concatenated for all folds as well as by fold (the mean of test sets subjects for each fold)), save the dataframes as xlsx in **models/ShapValues/shap_computed_from_all_Xtrain/** folder. Run **make_shap_df()** in **feature_imptce_shap_analysis.py** with SBM=True for SBM ROI (implemented for the Destrieux atlas, and including subcortical ROI) or with VBM=True (implemented for Neuromorphometrics atlas).
--
+- Find specific and suppressor ROIs among ROIs of importance according to SHAP values and their confidence intervals (calculated from SHAP values under H0, which corresponds to SHAP values computed from classifiers trained with randomly permuted labels). To do so, run **read_bootstrapped_shap()** in **feature_imptce_shap_analysis.py** with VBM=True for VBM ROI or SBM=True for SBM ROI, and save=True to save the dictionary summarizing the results of these analyses.
+- run **plot_beeswarm()** in **feature_imptce_shap_analysis.py** to get the beeswarm plots for either VBM ROI or SBM ROI.
+- run **plot_glassbrain()** in **feature_imptce_shap_analysis.py** to get the glassbrain plots for either VBM ROI or SBM ROI.
+- **for regression with specific vs suppressor ROI** : run **regression_analysis_with_specific_and_suppressor_ROI()** with plot_and_save_jointplot=True to plot and save the jointplot displaying regression for specific vs suppressor ROI and/or plot_and_save_kde_plot=True to display and save the kde plot displaying the distributions of BD vs HC participants' scores using both specific and suppressor ROI for regression (but without using ROI that aren't either specific or suppressor/ using only ROI selected using SHAP values and their estimated confidence intervals using H0 (random permutations of labels)).
 
 

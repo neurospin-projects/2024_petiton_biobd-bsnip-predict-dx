@@ -190,7 +190,7 @@ SBM with any type of residualization: before correction for multiple tests:  167
 
 """
 def main():
-    perform_tests(res="res_age_sex", save=False, SBM=True)
+    perform_tests(res="res_age_sex", save=False, VBM=True)
 
 
 if __name__ == "__main__":

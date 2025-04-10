@@ -6,7 +6,9 @@ from sklearn.model_selection import GridSearchCV
 import sklearn.linear_model as lm
 from xgboost import XGBClassifier 
 import pandas as pd
-
+import nibabel
+from torchvision.transforms.transforms import Compose
+from transforms import Crop, Padding, Normalize
 
 DATAFOLDER="/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/data/processed/"
 
@@ -135,7 +137,7 @@ def compute_covariance(X, y):
     return covariance
 
 def get_reshaped_4D(array, brain_mask_path_):
-    nifti_mask = nib.load(brain_mask_path_)
+    nifti_mask = nibabel.load(brain_mask_path_)
     nifti_data_mask = nifti_mask.get_fdata()
     image_shape = nifti_data_mask.shape
     # flatten mask
@@ -153,3 +155,39 @@ def get_reshaped_4D(array, brain_mask_path_):
     reshaped_img = result_array_.reshape((nb_subjects,*image_shape))
 
     return reshaped_img
+
+def inverse_transform(arr):
+    """
+    Inverse the transformations applied by cropping and padding.
+
+    Parameters:
+        arr (np.ndarray): Input array with squeezed shapes (121, 128, 121), or (128, 128, 128).
+
+    Returns:
+        np.ndarray: Array after inverse transformations, restored to the shape (121, 145, 121).
+    """
+    # Ensure the array shape is as expected
+    assert arr.ndim == 3, f"Expected a 3D array, but got shape {arr.shape}"
+
+    # Step 1: Undo Padding
+    if arr.shape == (128, 128, 128):  # From padded (1, 128, 128, 128)
+        arr = arr[3:124, 4:125, 4:125]  # Crop to (121, 121, 121)
+
+    # Step 2: Undo Cropping
+    # Restore to (121, 145, 121) by padding
+    pad_x = (145 - arr.shape[1]) // 2  # Padding for x-axis
+    pad_y = (121 - arr.shape[2]) // 2  # Padding for y-axis
+
+    arr = np.pad(
+        arr,
+        ((0, 0), (pad_x, 145 - arr.shape[1] - pad_x), (pad_y, 121 - arr.shape[2] - pad_y)),
+        mode="constant",
+    )
+
+    return arr
+
+# Function to round to 2 significant digits and keep scientific notation
+def round_sci(x, sig=2):
+    if pd.isna(x) or x == 0:
+            return str(x)
+    return f"{x:.{sig}e}".replace("e+0", "e").replace("e+","e").replace("e0", "e")

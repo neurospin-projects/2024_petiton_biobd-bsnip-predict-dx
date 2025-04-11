@@ -558,7 +558,7 @@ def regression_analysis_with_specific_and_suppressor_ROI(VBM=False, SBM=False, p
     if plot_and_save_jointplot: 
         # Create a joint plot with scatter and marginal density plots
         plt.figure(figsize=(8, 8))
-        g = sns.jointplot(data=df, x="score_supr", y="score_spec", hue="diagnosis")
+        g = sns.jointplot(data=df, x="score_supr", y="score_spec", hue="diagnosis", marker='o', s=100, alpha=0.7)
         g.ax_joint.set_xlabel("Score with Suppressor Features (AUC=%.2f)" % score_supr_auc, fontsize = 20)
         g.ax_joint.set_ylabel("Score with Speficic Features  (AUC=%.2f)" % score_spec_auc, fontsize = 20)
         # Increase font size for legend title and labels and ticks
@@ -784,6 +784,7 @@ def exploratory_analysis_part2(VBM=True, SBM=False): # implemented for VBM ROI o
     shared_strings_spec, shared_strings_supp = get_list_specific_supp_ROI(VBM=VBM, SBM=SBM)
     data = get_scaled_data(res="res_age_sex_site",VBM=VBM, SBM=SBM)
     list_roi = [roi for roi in list(data.columns) if roi.endswith("_CSF_Vol") or roi.endswith("_GM_Vol")]
+    others_colnames=[ roi for roi in list_roi if roi not in shared_strings_spec]
     X = data[list_roi]
     y = data.dx
     groups = data.site
@@ -801,13 +802,13 @@ def exploratory_analysis_part2(VBM=True, SBM=False): # implemented for VBM ROI o
     dict_atlas_roi_names = atlas_df.set_index('ROIabbr')['ROIname'].to_dict()
     shared_strings_spec, shared_strings_supp = get_list_specific_supp_ROI(VBM=VBM, SBM=SBM)
 
-    fa_clf_cv(X, y, groups, n_clusters=18, specfific_colnames=shared_strings_spec, others_colnames=shared_strings_supp) 
-    # (0.764749790751399, 0.6914362892559843) / 9 specific clusters (32 specific ROIs) (for suppressor ROI, from 27 ROI to 9 clusters)
+    fa_clf_cv(X, y, groups, n_clusters=18, specfific_colnames=shared_strings_spec, others_colnames=others_colnames) 
+    # (0.7548435370663116, 0.6802644155160441) / 9 specific clusters (32 specific ROIs) (for other ROIs, from 248 ROI to 9 clusters)
 
     results = pd.DataFrame(data=
         [[n_clusters] + list(fa_clf_cv(X, y, groups, n_clusters=n_clusters,
-                                    specfific_colnames=shared_strings_spec, others_colnames=shared_strings_supp))
-        for n_clusters in range(2, 20, 2)],
+                                    specfific_colnames=shared_strings_spec, others_colnames=others_colnames))
+        for n_clusters in range(2, 61, 2)],
         columns=["n_clusters", "auc", "bacc"])
 
     print(results.round(3))
@@ -827,15 +828,37 @@ def exploratory_analysis_part2(VBM=True, SBM=False): # implemented for VBM ROI o
     
 
     #     n_clusters    auc   bacc
-    # 0           2  0.715  0.673
-    # 1           4  0.717  0.667
-    # 2           6  0.767  0.687
-    # 3           8  0.771  0.697
-    # 4          10  0.768  0.684
-    # 5          12  0.771  0.671
-    # 6          14  0.769  0.689
-    # 7          16  0.767  0.676
-    # 8          18  0.765  0.691
+    # 0            2  0.697  0.672
+    # 1            4  0.703  0.657
+    # 2            6  0.761  0.696
+    # 3            8  0.758  0.696
+    # 4           10  0.768  0.690
+    # 5           12  0.756  0.683
+    # 6           14  0.755  0.675
+    # 7           16  0.762  0.679
+    # 8           18  0.755  0.680
+    # 9           20  0.755  0.678
+    # 10          22  0.744  0.682
+    # 11          24  0.745  0.683
+    # 12          26  0.750  0.684
+    # 13          28  0.753  0.684
+    # 14          30  0.752  0.686
+    # 15          32  0.749  0.686
+    # 16          34  0.750  0.681
+    # 17          36  0.752  0.681
+    # 18          38  0.752  0.687
+    # 19          40  0.751  0.685
+    # 20          42  0.754  0.685
+    # 21          44  0.756  0.686
+    # 22          46  0.756  0.691
+    # 23          48  0.754  0.687
+    # 24          50  0.752  0.681
+    # 25          52  0.753  0.689
+    # 26          54  0.752  0.685
+    # 27          56  0.752  0.686
+    # 28          58  0.750  0.690
+    # 29          60  0.753  0.692
+
 
     # ********** #
     n_clusters = 6
@@ -849,7 +872,7 @@ def exploratory_analysis_part2(VBM=True, SBM=False): # implemented for VBM ROI o
 
     plt.title('Hierarchical Clustering Dendrogram')
     # plot the top three levels of the dendrogram
-    dendro = plot_dendrogram(model, color_threshold=8)
+    dendro = plot_dendrogram(model, nb_clusters=6)
     # dendro["ivl"] gives the leaf labels in the order they appear along the x-axis as strings
     reorder_idx = np.array([int(idx) for idx in dendro["ivl"]])
     reorder_columns = Xdf.columns[reorder_idx]
@@ -858,7 +881,7 @@ def exploratory_analysis_part2(VBM=True, SBM=False): # implemented for VBM ROI o
     zip(reorder_columns, model.labels_[reorder_idx])]
 
     loc, _ = plt.xticks()
-    plt.xticks(loc, labels=reorder_columns_label)#, rotation=45)
+    plt.xticks(loc, labels=reorder_columns_label) #, rotation=45)
     # plt.show()
     plt.close()
 
@@ -870,18 +893,18 @@ def exploratory_analysis_part2(VBM=True, SBM=False): # implemented for VBM ROI o
     sns.set_theme(font_scale=0.5)
     g = sns.heatmap(corr_matrix, fmt=".2f", cmap="Reds", square=True,
                 linewidths=0.5, vmin=0, vmax=1)
-    sns.set_theme(font_scale=1.0)
-    ax = plt.gca()
-    square = patches.Rectangle((0, 0), 1, 2, edgecolor='purple', facecolor='none')
-    ax.add_patch(square)
 
-    plt.xticks(rotation=40, ha='right', fontsize=20)  
-    plt.yticks(fontsize=20)
-    plt.title("Clustered Correlation Matrix Specific VBM ROI (Absolute Values/6 clusters)", fontsize = 20)
+    # Rotate labels, adjust font size
+    plt.xticks(rotation=45, ha='right', fontsize=12)  # Adjust rotation and font size
+    plt.yticks(fontsize=12)  # Set y-axis font size
+    plt.title("Clustered Correlation Matrix Specific VBM ROI (Absolute Values/5 clusters)", fontsize=15)
+
     # Adjust color bar label size
     colorbar = g.collections[0].colorbar
-    colorbar.ax.tick_params(labelsize=20)  # Adjust colorbar ticks size
-    # plt.show()
+    colorbar.ax.tick_params(labelsize=12)  # Adjust colorbar ticks size
+
+    plt.subplots_adjust(bottom=0.25)  # Adjust bottom margin to avoid clipping of labels
+    plt.show()
     plt.close()
 
     # %% Glass brains
@@ -938,7 +961,7 @@ def exploratory_analysis_part2(VBM=True, SBM=False): # implemented for VBM ROI o
 
         clust_img = image.new_img_like(atlas_nii, clust_arr)
 
-        plotting.plot_glass_brain(clust_img, title=clust_name, vmax=vmax, colorbar=True, plot_abs=False, symmetric_cbar=True)
+        plotting.plot_glass_brain(clust_img, title=clust_name, vmax=vmax, colorbar=True, plot_abs=False, symmetric_cbar=True, threshold=0,cmap = plt.cm.coolwarm)
         #plotting.plot_glass_brain(clust_img, title=clust_name, vmin=vmin, vmax=vmax, colorbar=True, plot_abs=False, symmetric_cbar=True)
         plotting.show()
         # plt.savefig(OUTPUT_BASENAME + "plot_specific_FeatureAgglomeration_cluster_shapsum=%.3f__%s.pdf" % (df.mean_abs_shap.sum(), clust_name.replace("_CSF", "")))
@@ -1243,8 +1266,8 @@ def main():
     # quit()
     # forward_maps_voxelwise()
     # quit()
-    exploratory_analysis_part2()
-    quit()
+    # exploratory_analysis_part2()
+    # quit()
 
     regression_analysis_with_specific_and_suppressor_ROI(VBM=True,plot_and_save_jointplot=True, plot_and_save_kde_plot=True)
     quit()

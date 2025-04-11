@@ -11,6 +11,7 @@ from torchvision.transforms.transforms import Compose
 from transforms import Crop, Padding, Normalize
 from scipy.cluster.hierarchy import dendrogram
 import matplotlib.pyplot as plt
+from scipy.cluster.hierarchy import fcluster
 
 
 DATAFOLDER="/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/data/processed/"
@@ -196,8 +197,15 @@ def round_sci(x, sig=2):
     return f"{x:.{sig}e}".replace("e+0", "e").replace("e+","e").replace("e0", "e")
 
 
+def get_threshold_for_k_clusters(linkage_matrix, k):
+    for t in np.linspace(0, linkage_matrix[:, 2].max(), 500):
+        labels = fcluster(linkage_matrix, t=t, criterion='distance')
+        if len(np.unique(labels)) == k:
+            return t
+    return None
 
-def plot_dendrogram(model, **kwargs):
+
+def plot_dendrogram(model, nb_clusters=6):
     # Create linkage matrix and then plot the dendrogram
 
     # create the counts of samples under each node
@@ -219,10 +227,16 @@ def plot_dendrogram(model, **kwargs):
 
     linkage_matrix = np.column_stack([model.children_, model.distances_,
                                       counts]).astype(float)
+    
+    threshold = get_threshold_for_k_clusters(linkage_matrix, k=nb_clusters)
+
 
     # Plot the corresponding dendrogram
-    dendro = dendrogram(linkage_matrix, **kwargs)
+    dendro = dendrogram(linkage_matrix, color_threshold=threshold, above_threshold_color='gray')
     plt.grid(False)
-    plt.xticks(rotation=40, ha='right', fontsize=20) 
+    plt.xticks(rotation=35, ha='right', fontsize=20) 
+    plt.subplots_adjust(bottom=0.3)
+    plt.tick_params(axis='both', labelsize=10) 
+
 
     return dendro

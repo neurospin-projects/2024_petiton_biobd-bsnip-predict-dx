@@ -967,8 +967,6 @@ def exploratory_analysis_part2(VBM=True, SBM=False): # implemented for VBM ROI o
         # plt.savefig(OUTPUT_BASENAME + "plot_specific_FeatureAgglomeration_cluster_shapsum=%.3f__%s.pdf" % (df.mean_abs_shap.sum(), clust_name.replace("_CSF", "")))
         plt.close()
 
-
-
 def forward_maps_ROI(VBM=False, SBM=False):
     # Read classification scores
     if VBM : scores_path = ROOT+"results_classif/stacking/SVMRBF_VBMROI/scores_tr_te_N861_train_size_N800.pkl"
@@ -1224,7 +1222,111 @@ def forward_maps_voxelwise(verbose=False, display_plot=False):
             print("top 20 absolute values in cov: ")
             print(df_sorted.head(20))
 
+def pls_regression(VBM=True, SBM=False): # implemented for VBM ROI only so far
+    """
+        Aim : find how many clusters of specific ROIs are best for classification 
+        
 
+    """
+    from sklearn.cross_decomposition import PLSRegression
+    from sklearn.model_selection import cross_val_score, StratifiedKFold
+    from sklearn.metrics import make_scorer, roc_auc_score
+
+    # get list of overall specific and suppressor ROI (ROIs with mean abs SHAP values that are within the CI for all LOSO-CV folds)
+    shared_strings_spec, shared_strings_supp = get_list_specific_supp_ROI(VBM=VBM, SBM=SBM)
+    data = get_scaled_data(res="res_age_sex_site",VBM=VBM, SBM=SBM)
+    list_roi = [roi for roi in list(data.columns) if roi.endswith("_CSF_Vol") or roi.endswith("_GM_Vol")]
+    others_colnames=[roi for roi in list_roi if roi not in shared_strings_spec]
+
+    # only specific ROI
+    X = data[shared_strings_spec]
+    # all ROI
+    # X = data[list_roi]
+    y = data.dx
+    groups = data.site
+    print("X ",np.shape(X), type(X), "y", type(y), np.shape(y))
+
+    component_range = range(1, 11)  # Trying components from 1 to 10
+
+    # Stratified 5-fold CV
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+
+    # Store mean AUC scores
+    mean_auc_scores = []
+
+    for n in component_range:
+        pls = PLSRegression(n_components=n)
+        auc_scores = cross_val_score(pls, X, y, cv=cv,
+                                    scoring=make_scorer(roc_auc_score))
+        mean_auc_scores.append(np.mean(auc_scores))
+
+    # Find best number of components
+    best_n = component_range[np.argmax(mean_auc_scores)]
+    print(f"Best number of components: {best_n} with maximum ROC-AUC score {np.max(mean_auc_scores)}")
+    # 0.7354 ROC-AUC for 2 components with only specific ROI
+    # 0.7514 ROC-AUC for 5 components with all ROI
+
+    
+    # Plot ROC-AUC depending on nb of components. We find the ideal number of components to be 2. 
+    plt.plot(component_range, mean_auc_scores, marker='o')
+    plt.xlabel('Number of PLS components')
+    plt.ylabel('Mean ROC AUC (5-fold CV)')
+    plt.title('PLS Regression: Component Selection')
+    plt.grid(True)
+    plt.show()
+
+    # Fit model with best number of components on all data
+    pls = PLSRegression(n_components=best_n)
+    pls.fit(X, y)
+
+    # Feature weights (shape: n_features x n_components)
+    weights = pls.x_weights_
+
+    # Feature loadings (shape: n_features x n_components)
+    loadings = pls.x_loadings_
+
+    # Component scores for each subject (shape: n_samples x n_components)
+    scores = pls.x_scores_
+
+    # Feature names if you're using a DataFrame
+    feature_names = X.columns if hasattr(X, "columns") else [f"f{i}" for i in range(X.shape[1])]
+
+    # Turn weights into a DataFrame
+    cols = []
+    for i in range(best_n):
+        cols.append("Comp "+str(i+1))
+
+    weights_df = pd.DataFrame(weights, index=feature_names, columns=cols)
+    loadings_df = pd.DataFrame(loadings, index=feature_names, columns=cols)
+
+    print("weights df: \n",weights_df)
+    print("loadings df: \n",loadings_df)
+
+    # Plot top 20 contributors to each component
+    top_features = weights_df.abs().sum(axis=1).sort_values(ascending=False).head(20).index
+    weights_df.loc[top_features].plot(kind='bar', figsize=(10, 6), title='Feature Weights by component')
+    plt.ylabel('Weight Magnitude')
+    plt.tight_layout()
+    plt.show()
+
+
+    # Compute hierarchical clustering
+    linkage_matrix = linkage(weights_df, method='ward')  # 'ward' works well for Euclidean
+
+    # Plot dendrogram
+    plt.figure(figsize=(10, 6))
+    dendrogram(linkage_matrix, labels=weights_df.index, leaf_rotation=90)
+    plt.title("Hierarchical Clustering of Features Based on PLS Weights")
+    plt.tight_layout()
+    plt.show()
+
+    sns.clustermap(weights_df.drop(columns='Cluster'),
+               method='ward', metric='euclidean',
+               cmap='vlag', figsize=(8, 10),
+               standard_scale=1)
+    plt.suptitle("Clustermap of Feature Weights", y=1.02)
+    plt.show()
 
 """
 SVM-RBF SHAP VALUES ANALYSIS
@@ -1268,6 +1370,8 @@ def main():
     # quit()
     # exploratory_analysis_part2()
     # quit()
+    pls_regression()
+    quit()
 
     regression_analysis_with_specific_and_suppressor_ROI(VBM=True,plot_and_save_jointplot=True, plot_and_save_kde_plot=True)
     quit()

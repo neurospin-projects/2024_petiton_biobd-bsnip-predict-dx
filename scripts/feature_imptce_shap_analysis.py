@@ -147,7 +147,7 @@ def make_shap_df(verbose=False, VBM=False, SBM=False):
 
 def get_shared_specific_or_suppressor_ROIs_btw_folds(dict_ROIs, verbose=False):
     # Convert arrays to sets and find the intersection
-    shared_strings = set(dict_ROIs[next(iter(dict_ROIs))])  # Start with the first key's set
+    shared_strings = set(dict_ROIs[next(iter(dict_ROIs))])  
 
     for arr in dict_ROIs.values():
         shared_strings.intersection_update(arr)  # Keep only shared elements
@@ -278,6 +278,7 @@ def read_bootstrapped_shap(save=False, VBM=False, SBM=False):
     concatenated_shap_arrays = []
 
     # doing the analysis for each fold
+    nb_h0_reject = []
     for site in get_predict_sites_list():
         shap_df_stats_current_site = shap_df_stats[shap_df_stats["fold"]==site].copy()
         shap_df_stats_current_site = shap_df_stats_current_site.set_index("ROI")
@@ -312,6 +313,8 @@ def read_bootstrapped_shap(save=False, VBM=False, SBM=False):
         shap_stat = dict(ROI=m.index.values, mean_abs_shap=m.values, ci_low=ci_low.values, ci_high=ci_high.values,
                   mean_abs_shap_h0=m_h0.iloc[0].values, select = m_h0.iloc[0].values < ci_low.values)
         shap_stat = pd.DataFrame(shap_stat)
+        nb_h0_reject.append(shap_stat["select"].sum())
+        print(site ," number of ROI where h0 is rejected :",shap_stat["select"].sum())
 
         shap_stat.sort_values(by="mean_abs_shap", ascending=False, inplace=True)
         shap_stat.reset_index(drop=True, inplace=True)
@@ -335,16 +338,18 @@ def read_bootstrapped_shap(save=False, VBM=False, SBM=False):
             if save:
                 if VBM : shap_stat.to_excel(RESULTS_FEATIMPTCE_AND_STATS_DIR+"shap_from_SVM_RBF_VBM_"+site+"-univstat_avril25.xlsx", sheet_name='SHAP_roi_univstat_'+site, index=False)
                 if SBM : shap_stat.to_excel(RESULTS_FEATIMPTCE_AND_STATS_DIR+"shap_from_EN_SBM_"+site+"-univstat_avril25.xlsx", sheet_name='SHAP_roi_univstat_'+site, index=False)
+        print("number of specific ROI among those rejecting h0:",len(shap_stat[shap_stat["type"]=="specific"]["ROI"]))
 
         specific_ROI[site]=shap_stat[shap_stat["type"]=="specific"]["ROI"].values
         suppressor_ROI[site]=shap_stat[shap_stat["type"]=="suppressor"]["ROI"].values
-
+    print("mean nb of ROI where h0 is rejected for all sites: ",round(np.mean(nb_h0_reject),2), " std ", round(np.std(nb_h0_reject),2))
     shared_strings_spec = get_shared_specific_or_suppressor_ROIs_btw_folds(specific_ROI)
     shared_strings_supp = get_shared_specific_or_suppressor_ROIs_btw_folds(suppressor_ROI)  
 
     # lists of specific and suppressor ROIs shared across all 12 folds
     shap_spec = list(shared_strings_spec)
     shap_suppr = list(shared_strings_supp)
+    print("number of specific ROIs overall (that also reject h0 for each fold) ", len(shap_spec))
 
     ################# SAVE SUMMARY VALUES FOR ANALYSIS OF SHAP VALUES ######################  
     concatenated_shap_arrays=np.concatenate(concatenated_shap_arrays, axis=0)
@@ -406,11 +411,11 @@ def plot_beeswarm(VBM=False, SBM=False):
     if VBM : mean_abs_specific = np.mean(np.abs(concatenated_shap_arrays_with_negated_CSF[:,sorted_indices_specificROI]),axis=0)
 
     # SHAP summary plot
-    # if VBM : shap.summary_plot(concatenated_shap_arrays_with_negated_CSF[:,sorted_indices_specificROI], all_folds_Xtest_concatenated[:,sorted_indices_specificROI], \
-    #                   feature_names=[dict_atlas_roi_names[list_rois[i]] for i in sorted_indices_specificROI], max_display=len(sorted_indices_specificROI))
+    if VBM : shap.summary_plot(concatenated_shap_arrays_with_negated_CSF[:,sorted_indices_specificROI], all_folds_Xtest_concatenated[:,sorted_indices_specificROI], \
+                      feature_names=[dict_atlas_roi_names[list_rois[i]] for i in sorted_indices_specificROI], max_display=len(sorted_indices_specificROI))
    
-    # if SBM : shap.summary_plot(concatenated_shap_arrays[:,sorted_indices_specificROI], all_folds_Xtest_concatenated[:,sorted_indices_specificROI], \
-    #                   feature_names=[list_rois[i] for i in sorted_indices_specificROI], max_display=len(sorted_indices_specificROI))
+    if SBM : shap.summary_plot(concatenated_shap_arrays[:,sorted_indices_specificROI], all_folds_Xtest_concatenated[:,sorted_indices_specificROI], \
+                      feature_names=[list_rois[i] for i in sorted_indices_specificROI], max_display=len(sorted_indices_specificROI))
    
     print("Sorted ROI (highest to lowest mean_abs):", [list_rois[i] for i in sorted_indices_specificROI])
     # get univariate statistics (obtained with univariate_stats.py)
@@ -436,6 +441,7 @@ def plot_glassbrain(dict_plot=None, title=""):
     """
         Aim : plot glassbrain of specfic ROI from SHAP values obtained with an SVM-RBF and VBM ROI features
     """
+    glassbrain_VBM_SHAP_analysis=False
     if dict_plot is None:
         glassbrain_VBM_SHAP_analysis = True
         specific_roi_df = read_pkl(RESULTS_FEATIMPTCE_AND_STATS_DIR+"specific_ROI_SHAP_SVMRBF_VBM.pkl")
@@ -1222,15 +1228,69 @@ def forward_maps_voxelwise(verbose=False, display_plot=False):
             print("top 20 absolute values in cov: ")
             print(df_sorted.head(20))
 
-def pls_regression(VBM=True, SBM=False): # implemented for VBM ROI only so far
+
+def pls_regression_LOSOCV(nb_components, specific_roi=None):
     """
-        Aim : find how many clusters of specific ROIs are best for classification 
+    nb_components (int) : number of components for PLS regression
+    specific_roi (list) : list of specific ROI names
+    """
+    from sklearn.cross_decomposition import PLSRegression
+
+    splits = get_LOSO_CV_splits_N861()
+    participants = get_participants()
+    participants_all = list(splits["Baltimore-"+str(800)][0])+list(splits["Baltimore-"+str(800)][1])
+    participants_VBM = participants[participants['participant_id'].isin(participants_all)].reset_index(drop=True)
+
+    residualizer = Residualizer(data=participants_VBM, formula_res="site + age + sex", formula_full="site + age + sex + dx")
+    Zres = residualizer.get_design_mat(participants_VBM)
+
+    VBMdf = pd.read_csv(DATAFOLDER+"VBMROI_Neuromorphometrics.csv")
+    # reorder VBMdf to have rows in the same order as participants_VBM
+    VBMdf = VBMdf.set_index('participant_id').reindex(participants_VBM["participant_id"].values).reset_index()
+
+    auc_scores = []
+    for site in get_predict_sites_list():
+        train_ids, test_ids = splits[f"{site}-800"]
+        df_tr = VBMdf[VBMdf["participant_id"].isin(train_ids)].drop(columns=['participant_id', 'session', 'TIV', 'CSF_Vol', 'GM_Vol', 'WM_Vol'])
+        df_te = VBMdf[VBMdf["participant_id"].isin(test_ids)].drop(columns=['participant_id', 'session', 'TIV', 'CSF_Vol', 'GM_Vol', 'WM_Vol'])
+        df_tr = remove_zeros(df_tr)
+        df_te = remove_zeros(df_te)
+        if specific_roi: df_tr, df_te = df_tr[specific_roi], df_te[specific_roi]
+        X_train, X_test = df_tr.values, df_te.values
+        train_idx = participants_VBM[participants_VBM['participant_id'].isin(train_ids)].index
+        test_idx = participants_VBM[participants_VBM['participant_id'].isin(test_ids)].index
+        y_train = participants_VBM.loc[train_idx, 'dx'].values
+        y_test = participants_VBM.loc[test_idx, 'dx'].values
+ 
+        # fit residualizer
+        residualizer.fit(X_train, Zres[train_idx])
+        X_train = residualizer.transform(X_train, Zres[train_idx])
+        X_test = residualizer.transform(X_test, Zres[test_idx])
+
+        # fit scaler
+        scaler_ = StandardScaler()
+        X_train = scaler_.fit_transform(X_train)
+        X_test = scaler_.transform(X_test)
+
+        pls = PLSRegression(n_components=nb_components).fit(X_train, y_train)
+        y_scores = pls.predict(X_test).ravel()
+        auc = roc_auc_score(y_test, y_scores)
+        auc_scores.append(auc)
+
+    return auc_scores
+
+def pls_regression(VBM=True, SBM=False, specific_ROI=True): # implemented for VBM ROI only so far
+    """
+        Aim : find how many clusters of specific ROIs are best for classification
+        specific_ROI : perform PLS regression only on specific ROI or on all ROI 
         
 
     """
     from sklearn.cross_decomposition import PLSRegression
     from sklearn.model_selection import cross_val_score, StratifiedKFold
     from sklearn.metrics import make_scorer, roc_auc_score
+    from sklearn.model_selection import train_test_split
+
 
     # get list of overall specific and suppressor ROI (ROIs with mean abs SHAP values that are within the CI for all LOSO-CV folds)
     shared_strings_spec, shared_strings_supp = get_list_specific_supp_ROI(VBM=VBM, SBM=SBM)
@@ -1238,45 +1298,45 @@ def pls_regression(VBM=True, SBM=False): # implemented for VBM ROI only so far
     list_roi = [roi for roi in list(data.columns) if roi.endswith("_CSF_Vol") or roi.endswith("_GM_Vol")]
     others_colnames=[roi for roi in list_roi if roi not in shared_strings_spec]
 
-    # only specific ROI
-    X = data[shared_strings_spec]
-    # all ROI
-    # X = data[list_roi]
-    y = data.dx
-    groups = data.site
-    print("X ",np.shape(X), type(X), "y", type(y), np.shape(y))
-
+    
     component_range = range(1, 11)  # Trying components from 1 to 10
 
     # Stratified 5-fold CV
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-
-
-    # Store mean AUC scores
+    # cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    # mean_auc_scores = []
+    # for n in component_range:
+    #     pls = PLSRegression(n_components=n)
+    #     auc_scores = cross_val_score(pls, X, y, cv=cv,
+    #                                 scoring=make_scorer(roc_auc_score))
+    #     mean_auc_scores.append(np.mean(auc_scores))
+    
     mean_auc_scores = []
-
     for n in component_range:
-        pls = PLSRegression(n_components=n)
-        auc_scores = cross_val_score(pls, X, y, cv=cv,
-                                    scoring=make_scorer(roc_auc_score))
-        mean_auc_scores.append(np.mean(auc_scores))
+        if specific_ROI:mean_auc_scores.append(np.mean(pls_regression_LOSOCV(nb_components = n, specific_roi = shared_strings_spec)))
+        else : mean_auc_scores.append(np.mean(pls_regression_LOSOCV(nb_components = n)))
 
     # Find best number of components
     best_n = component_range[np.argmax(mean_auc_scores)]
-    print(f"Best number of components: {best_n} with maximum ROC-AUC score {np.max(mean_auc_scores)}")
-    # 0.7354 ROC-AUC for 2 components with only specific ROI
-    # 0.7514 ROC-AUC for 5 components with all ROI
+    print(f"Best number of components: {best_n} with maximum ROC-AUC score {round(np.max(mean_auc_scores),4)}")
+    best_n = 3
+    print(best_n, " components roc auc ",round(mean_auc_scores[best_n-1],4))
+    # with 5-fold CV : 0.7354 ROC-AUC for 2 components with only specific ROI, 0.7514 ROC-AUC for 5 components with all ROI
+    # with LOSO CV : 0.7166 ROC-AUC for 1 component with only specific ROI, 
 
-    
     # Plot ROC-AUC depending on nb of components. We find the ideal number of components to be 2. 
-    plt.plot(component_range, mean_auc_scores, marker='o')
-    plt.xlabel('Number of PLS components')
-    plt.ylabel('Mean ROC AUC (5-fold CV)')
-    plt.title('PLS Regression: Component Selection')
-    plt.grid(True)
-    plt.show()
+    # plt.plot(component_range, mean_auc_scores, marker='o')
+    # plt.xlabel('Number of PLS components')
+    # plt.ylabel('Mean ROC AUC (LOSO-CV)')
+    # if specific_ROI: plt.title('PLS Regression: Component Selection with Specific ROIs')
+    # else: plt.title('PLS Regression: Component Selection with all ROIs')
+    # plt.grid(True)
+    # plt.show()
 
-    # Fit model with best number of components on all data
+    # Fit model with best number of components on all data (no train/test splits)
+    if specific_ROI: X = data[shared_strings_spec]
+    else : X = data[list_roi]
+    y = data.dx
+    print("X ",np.shape(X), type(X), "y", type(y), np.shape(y))
     pls = PLSRegression(n_components=best_n)
     pls.fit(X, y)
 
@@ -1289,44 +1349,141 @@ def pls_regression(VBM=True, SBM=False): # implemented for VBM ROI only so far
     # Component scores for each subject (shape: n_samples x n_components)
     scores = pls.x_scores_
 
-    # Feature names if you're using a DataFrame
+    # Feature names 
     feature_names = X.columns if hasattr(X, "columns") else [f"f{i}" for i in range(X.shape[1])]
+    print(feature_names)
+    atlas_df = pd.read_csv(ROOT+"data/atlases/lobes_Neuromorphometrics.csv", sep=';')
+    dict_atlas_roi_names = atlas_df.set_index('ROIabbr')['ROIname'].to_dict()
 
-    # Turn weights into a DataFrame
-    cols = []
-    for i in range(best_n):
-        cols.append("Comp "+str(i+1))
+    def rename_col(col, correspondence_dict):
+        base_name = correspondence_dict.get(col, col)  # Fallback to original name if not in dict
+        if "_GM_Vol" in col:
+            return f"{base_name} GM"
+        elif "_CSF_Vol" in col:
+            return f"{base_name} CSF"
+        else:
+            return base_name
+    
+    cols = ["Comp "+str(i+1) for i in range(best_n)]
+    feature_names = [rename_col(col, dict_atlas_roi_names) for col in feature_names]
 
-    weights_df = pd.DataFrame(weights, index=feature_names, columns=cols)
-    loadings_df = pd.DataFrame(loadings, index=feature_names, columns=cols)
+    loadings_df = pd.DataFrame(loadings, index=feature_names, columns=cols) # dataframe for loadings
+    weights_df = pd.DataFrame(weights, index=feature_names, columns=cols) # dataframe for weights
+    feature_names_csf = [ roi for roi in feature_names if roi.endswith(" CSF")]
+
+    # Plot features' loadings for each component
+    # top_features = loadings_df.abs().sum(axis=1).sort_values(ascending=False).index #head(20).index
+    # loadings_df.loc[top_features].plot(kind='bar', figsize=(10, 6), title='Feature Loadings by component')
+    # plt.ylabel('Loading Magnitude')
+    # plt.tight_layout()
+    # plt.show()
 
     print("weights df: \n",weights_df)
     print("loadings df: \n",loadings_df)
+    print(feature_names_csf)
+    # negate CSF ROI loadings for interpretability
+    loadings_df.loc[feature_names_csf] = -1*loadings_df.loc[feature_names_csf]
+    # plot glassbrains for each component
+    # for comp_nb in range(0,best_n):
+    #     loadings_one_component = {idx.rsplit(' ', 1)[0]: row['Comp '+str(comp_nb+1)] for idx, row in loadings_df.iterrows()}
+    #     plot_glassbrain(dict_plot=loadings_one_component, title="loadings of PLS component "+str(comp_nb+1))
 
-    # Plot top 20 contributors to each component
-    top_features = weights_df.abs().sum(axis=1).sort_values(ascending=False).head(20).index
-    weights_df.loc[top_features].plot(kind='bar', figsize=(10, 6), title='Feature Weights by component')
-    plt.ylabel('Weight Magnitude')
-    plt.tight_layout()
-    plt.show()
+
+    """
+    # get specific ROI for correlation matrix with each component :
+    print(data)
+    exclude_cols = {"age", "sex", "site", "dx"}
+    data.rename(columns={
+        col: rename_col(col, dict_atlas_roi_names)
+        for col in data.columns if col not in exclude_cols
+    }, inplace=True)
+
+    print(loadings_df.index)
+    ROI_df_specific = data[loadings_df.index]
+    print(ROI_df_specific)
+    loadings_comp1 = loadings_df["Comp 1"]
+    print(loadings_comp1)
+    correlation = ROI_df_specific.corrwith(loadings_comp1, axis=0)  # axis=0 to correlate across rows (get a correlation value for each ROI)
+
+    correlation_df = correlation.to_frame(name='Correlation_with_Comp1')
+
+    print(correlation_df)
+    """
+
+    if best_n>=2:
+        train , test = False, True
+        assert not (train and test)
+        pls = PLSRegression(n_components=best_n)
+        print("best_n ",best_n)
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+        pls.fit(X_train, y_train)
+        scores = pls.x_scores_ # train scores
+        y_pred = pls.predict(X_test)
+        X_test_scores = np.dot(X_test, pls.x_weights_) # test scores
+
+        
+        # Create jointplot with same format as the one for specific and suppressor variables 
+        # created from univariate statistics
+        # Create DataFrame from scores and labels
+        if train: 
+            df_scores = pd.DataFrame({
+                "Comp1": scores[:, 0],
+                "Comp2": scores[:, 1],
+                "label": y_train
+            })
+        if test:
+            df_scores = pd.DataFrame({
+                "Comp1": X_test_scores[:, 0],
+                "Comp2": X_test_scores[:, 1],
+                "label": y_test
+            })
+
+        # Compute ROC AUC for each component separately
+        rocauc1 = roc_auc_score(y_train, df_scores["Comp1"])
+        rocauc2 = roc_auc_score(y_train, df_scores["Comp2"])
+        roc_auc_overall = roc_auc_score(y_test, y_pred)
+
+        print("roc auc comp 1 ",rocauc1, " roc auc comp 2 ", rocauc2, " roc auc overall ", roc_auc_overall)
+
+        # Create the jointplot
+        plt.figure(figsize=(8, 8))
+        g = sns.jointplot(
+            data=df_scores,
+            x="Comp1", y="Comp2",
+            hue="label",
+            kind="scatter",
+            marker='o',
+            s=100,
+            alpha=0.7,
+            palette="colorblind",
+            height=8
+        )
+
+        # Set axis labels with AUC
+        g.ax_joint.set_xlabel(f"PLS Component 1 (AUC={rocauc1:.2f})", fontsize=18)
+        g.ax_joint.set_ylabel(f"PLS Component 2 (AUC={rocauc2:.2f})", fontsize=18)
+
+        # Customize legend
+        legend = g.ax_joint.legend_
+        legend.set_title("Class", prop={'size': 16})
+        for text in legend.get_texts():
+            text.set_fontsize(14)
+
+        # Customize tick labels
+        g.ax_joint.tick_params(axis='both', labelsize=14)
+
+        g.figure.suptitle(f"PLS Component Scatter (Overall ROC AUC={roc_auc_overall:.2f})", y=0.98, fontsize=20)
+
+        plt.tight_layout()
+        plt.show()
 
 
-    # Compute hierarchical clustering
-    linkage_matrix = linkage(weights_df, method='ward')  # 'ward' works well for Euclidean
 
-    # Plot dendrogram
-    plt.figure(figsize=(10, 6))
-    dendrogram(linkage_matrix, labels=weights_df.index, leaf_rotation=90)
-    plt.title("Hierarchical Clustering of Features Based on PLS Weights")
-    plt.tight_layout()
-    plt.show()
 
-    sns.clustermap(weights_df.drop(columns='Cluster'),
-               method='ward', metric='euclidean',
-               cmap='vlag', figsize=(8, 10),
-               standard_scale=1)
-    plt.suptitle("Clustermap of Feature Weights", y=1.02)
-    plt.show()
+
+
+
+
 
 """
 SVM-RBF SHAP VALUES ANALYSIS
@@ -1362,7 +1519,7 @@ CLUSTERS
 
 def main():
     # plot_beeswarm(VBM=True)
-    # read_bootstrapped_shap(save=True,VBM=True)
+    # read_bootstrapped_shap(save=False, VBM=True)
     # plot_beeswarm(VBM=True)
     # plot_glassbrain()
     # quit()

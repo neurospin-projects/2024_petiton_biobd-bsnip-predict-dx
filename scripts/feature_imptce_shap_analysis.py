@@ -1279,7 +1279,8 @@ def pls_regression_LOSOCV(nb_components, specific_roi=None):
 
     return auc_scores
 
-def pls_regression(VBM=True, SBM=False, specific_ROI=True): # implemented for VBM ROI only so far
+def pls_regression(VBM=True, SBM=False, specific_ROI=False, plot_best_nb_components=False, plot_all_loadings=False, glassbrains=False,\
+                   plot_scores_first_two_components=False, scores_plot_on_test=False, scores_plot_on_train=False): # implemented for VBM ROI only so far
     """
         Aim : find how many clusters of specific ROIs are best for classification
         specific_ROI : perform PLS regression only on specific ROI or on all ROI 
@@ -1295,21 +1296,9 @@ def pls_regression(VBM=True, SBM=False, specific_ROI=True): # implemented for VB
     # get list of overall specific and suppressor ROI (ROIs with mean abs SHAP values that are within the CI for all LOSO-CV folds)
     shared_strings_spec, shared_strings_supp = get_list_specific_supp_ROI(VBM=VBM, SBM=SBM)
     data = get_scaled_data(res="res_age_sex_site",VBM=VBM, SBM=SBM)
-    list_roi = [roi for roi in list(data.columns) if roi.endswith("_CSF_Vol") or roi.endswith("_GM_Vol")]
-    others_colnames=[roi for roi in list_roi if roi not in shared_strings_spec]
-
-    
+    list_roi = [roi for roi in list(data.columns) if roi.endswith("_CSF_Vol") or roi.endswith("_GM_Vol")]    
     component_range = range(1, 11)  # Trying components from 1 to 10
 
-    # Stratified 5-fold CV
-    # cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    # mean_auc_scores = []
-    # for n in component_range:
-    #     pls = PLSRegression(n_components=n)
-    #     auc_scores = cross_val_score(pls, X, y, cv=cv,
-    #                                 scoring=make_scorer(roc_auc_score))
-    #     mean_auc_scores.append(np.mean(auc_scores))
-    
     mean_auc_scores = []
     for n in component_range:
         if specific_ROI:mean_auc_scores.append(np.mean(pls_regression_LOSOCV(nb_components = n, specific_roi = shared_strings_spec)))
@@ -1318,19 +1307,20 @@ def pls_regression(VBM=True, SBM=False, specific_ROI=True): # implemented for VB
     # Find best number of components
     best_n = component_range[np.argmax(mean_auc_scores)]
     print(f"Best number of components: {best_n} with maximum ROC-AUC score {round(np.max(mean_auc_scores),4)}")
-    best_n = 3
     print(best_n, " components roc auc ",round(mean_auc_scores[best_n-1],4))
     # with 5-fold CV : 0.7354 ROC-AUC for 2 components with only specific ROI, 0.7514 ROC-AUC for 5 components with all ROI
     # with LOSO CV : 0.7166 ROC-AUC for 1 component with only specific ROI, 
 
-    # Plot ROC-AUC depending on nb of components. We find the ideal number of components to be 2. 
-    # plt.plot(component_range, mean_auc_scores, marker='o')
-    # plt.xlabel('Number of PLS components')
-    # plt.ylabel('Mean ROC AUC (LOSO-CV)')
-    # if specific_ROI: plt.title('PLS Regression: Component Selection with Specific ROIs')
-    # else: plt.title('PLS Regression: Component Selection with all ROIs')
-    # plt.grid(True)
-    # plt.show()
+    if plot_best_nb_components:
+        # Plot ROC-AUC depending on nb of components. We find the ideal number of components to be 2. 
+        plt.plot(component_range, mean_auc_scores, marker='o')
+        plt.xlabel('Number of PLS components')
+        plt.ylabel('Mean ROC AUC (LOSO-CV)')
+        if specific_ROI: plt.title('PLS Regression: Component Selection with Specific ROIs')
+        else: plt.title('PLS Regression: Component Selection with all ROIs')
+        plt.grid(True)
+        plt.show()
+
 
     # Fit model with best number of components on all data (no train/test splits)
     if specific_ROI: X = data[shared_strings_spec]
@@ -1370,24 +1360,25 @@ def pls_regression(VBM=True, SBM=False, specific_ROI=True): # implemented for VB
     loadings_df = pd.DataFrame(loadings, index=feature_names, columns=cols) # dataframe for loadings
     weights_df = pd.DataFrame(weights, index=feature_names, columns=cols) # dataframe for weights
     feature_names_csf = [ roi for roi in feature_names if roi.endswith(" CSF")]
-
-    # Plot features' loadings for each component
-    # top_features = loadings_df.abs().sum(axis=1).sort_values(ascending=False).index #head(20).index
-    # loadings_df.loc[top_features].plot(kind='bar', figsize=(10, 6), title='Feature Loadings by component')
-    # plt.ylabel('Loading Magnitude')
-    # plt.tight_layout()
-    # plt.show()
+    if plot_all_loadings:
+        # Plot features' loadings for each component
+        top_features = loadings_df.abs().sum(axis=1).sort_values(ascending=False).index #head(20).index
+        loadings_df.loc[top_features].plot(kind='bar', figsize=(10, 6), title='Feature Loadings by component')
+        plt.ylabel('Loading Magnitude')
+        plt.tight_layout()
+        plt.show()
 
     print("weights df: \n",weights_df)
     print("loadings df: \n",loadings_df)
     print(feature_names_csf)
-    # negate CSF ROI loadings for interpretability
-    loadings_df.loc[feature_names_csf] = -1*loadings_df.loc[feature_names_csf]
+    
     # plot glassbrains for each component
-    # for comp_nb in range(0,best_n):
-    #     loadings_one_component = {idx.rsplit(' ', 1)[0]: row['Comp '+str(comp_nb+1)] for idx, row in loadings_df.iterrows()}
-    #     plot_glassbrain(dict_plot=loadings_one_component, title="loadings of PLS component "+str(comp_nb+1))
-
+    if glassbrains: 
+        # negate CSF ROI loadings for interpretability
+        loadings_df.loc[feature_names_csf] = -1*loadings_df.loc[feature_names_csf]
+        for comp_nb in range(0,best_n):
+            loadings_one_component = {idx.rsplit(' ', 1)[0]: row['Comp '+str(comp_nb+1)] for idx, row in loadings_df.iterrows()}
+            plot_glassbrain(dict_plot=loadings_one_component, title="loadings of PLS component "+str(comp_nb+1))
 
     """
     # get specific ROI for correlation matrix with each component :
@@ -1410,28 +1401,27 @@ def pls_regression(VBM=True, SBM=False, specific_ROI=True): # implemented for VB
     print(correlation_df)
     """
 
-    if best_n>=2:
-        train , test = False, True
-        assert not (train and test)
+    if best_n>=2 and plot_scores_first_two_components:
+        assert not (scores_plot_on_train and scores_plot_on_test)
         pls = PLSRegression(n_components=best_n)
         print("best_n ",best_n)
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
         pls.fit(X_train, y_train)
-        scores = pls.x_scores_ # train scores
-        y_pred = pls.predict(X_test)
-        X_test_scores = np.dot(X_test, pls.x_weights_) # test scores
-
         
         # Create jointplot with same format as the one for specific and suppressor variables 
         # created from univariate statistics
         # Create DataFrame from scores and labels
-        if train: 
+        if scores_plot_on_train: 
+            scores = pls.x_scores_ # train scores
+            y_pred_tr = pls.predict(X_train)
             df_scores = pd.DataFrame({
                 "Comp1": scores[:, 0],
                 "Comp2": scores[:, 1],
                 "label": y_train
             })
-        if test:
+        if scores_plot_on_test:
+            X_test_scores = pls.transform(X_test, y_test)[0] # test scores
+            y_pred_te = pls.predict(X_test)
             df_scores = pd.DataFrame({
                 "Comp1": X_test_scores[:, 0],
                 "Comp2": X_test_scores[:, 1],
@@ -1439,9 +1429,16 @@ def pls_regression(VBM=True, SBM=False, specific_ROI=True): # implemented for VB
             })
 
         # Compute ROC AUC for each component separately
-        rocauc1 = roc_auc_score(y_train, df_scores["Comp1"])
-        rocauc2 = roc_auc_score(y_train, df_scores["Comp2"])
-        roc_auc_overall = roc_auc_score(y_test, y_pred)
+        if scores_plot_on_train :
+            rocauc1 = roc_auc_score(y_train, df_scores["Comp1"])
+            rocauc2 = roc_auc_score(y_train, df_scores["Comp2"])
+            roc_auc_overall = roc_auc_score(y_train, y_pred_tr)
+            print("performance metric on train data: ")
+        if scores_plot_on_test : 
+            rocauc1 = roc_auc_score(y_test, df_scores["Comp1"])
+            rocauc2 = roc_auc_score(y_test, df_scores["Comp2"])
+            roc_auc_overall = roc_auc_score(y_test, y_pred_te)  
+            print("performance metric on test data: ") 
 
         print("roc auc comp 1 ",rocauc1, " roc auc comp 2 ", rocauc2, " roc auc overall ", roc_auc_overall)
 

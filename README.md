@@ -12,11 +12,12 @@ Additionally, Goto et al. (2022) *Advantages of Using Both Voxel- and Surface-ba
 In this work, we chose a Leave-One-Site-Out (LOSO) cross-validation scheme, in order to quantify site-effects.  
 This type of CV typically hinders performance, but generates more reproducible results.  
 
-## ML and DL tests 
+## Machine learning (ML) and Deep learning (DL) tests 
 
 ML tests include 5 models (2 linear, 3 non-linear): linear regression, elastic net regularization, multi-layer perceptron, gradient boosting, and support vector machines with radial basis function (RBF) kernels.  <br>
 
-DL tests include RI-DL (randomly initialized weights + CNN with densenet121 backbone), and TL (same thing with weights initialized using a contrastive learning model trained on healthy controls such that the latent representations of individuals close in age pulled closer than those with large age gaps). See: Dufumier et al. (2021). *Contrastive Learning with Continuous Proxy Meta-Data for 3D MRI Classification*. [DOI:10.48550/arXiv.2106.08808](https://doi.org/10.48550/arXiv.2106.08808).
+DL tests include RI-DL (randomly initialized weights + CNN with densenet121 backbone), and transfer learning (TL) (same thing with weights initialized using a contrastive learning model trained on healthy controls such that the latent representations of individuals close in age are pulled closer than those with large age gaps). See: Dufumier et al. (2021). *Contrastive Learning with Continuous Proxy Meta-Data for 3D MRI Classification*. [DOI:10.48550/arXiv.2106.08808](https://doi.org/10.48550/arXiv.2106.08808).  
+In addition to TL, we also leverage deep ensemble learning (DE), as suggested in Dufumier et al. (2024) *Exploring the potential of representation and transfer learning for anatomical neuroimaging: Application to psychiatry*. [DOI:10.1016/j.neuroimage.2024.120665](https://10.1016/j.neuroimage.2024.120665), by taking the mean predictions of five DL models (5 models were chosen following this study benchmarking the ideal number of such models needed in a deep ensemble: Petiton et al. (2024) *How and why does deep ensemble coupled with transfer learning increase performance in bipolar disorder and schizophrenia classification?* (https://hal.science/hal-04631924)).
 
 ## meta-model 
 In this work, we proprose a meta-model in the form of a linear regression using stacked training and testing set scores for BD vs HC classification.

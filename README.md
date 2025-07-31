@@ -23,7 +23,7 @@ In addition to TL, we also leverage deep ensemble learning (DE), as suggested in
 ## meta-model 
 In this work, we proprose a meta-model in the form of a linear regression using stacked training and testing set scores for BD vs HC classification.
 We find a significant improvement in performance metrics with 3 features, each corresponding to the scores of the best-performing models for each feature type (an elastic net for SBM ROI, an SVM-RBF for VBM ROI, and 5-DE TL for voxelwise VBM gray matter measures).  
-This reinforces the claims made by Goto et al., and suggests that different brain measures (SBM and VBM) at different granularities (ROI and voxelwise) can not only improve classification results, but also encode complementary information on the brain structure.  
+This reinforces the claims made by Goto et al., and suggests that different brain measures (SBM and VBM) at different granularities (ROI and voxelwise) can not only improve classification results, but also encode complementary information describing the brain structure.  
 
 
 

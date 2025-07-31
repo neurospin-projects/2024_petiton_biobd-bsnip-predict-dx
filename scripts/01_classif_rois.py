@@ -34,7 +34,9 @@ all_subcortical_rois_sbm = seven_subcortical_roi_sbm + ['Left-Lateral-Ventricle'
                                  'CC_Central', 'CC_Mid_Anterior', 'CC_Anterior']
 
 # outputs
-RESULTSFOLDER=ROOT+"results_classif/classifSBM/"
+RESULTSFOLDER=ROOT+"results_classif/"
+RESULTSFOLDER_SBM=RESULTSFOLDER+"classifSBM/"
+RESULTSFOLDER_VBM=RESULTSFOLDER+"classifVBM/"
 
 def remove_zeros(df, verbose=False):
         columns_with_only_zeros = df.columns[(df == 0).all()]
@@ -51,102 +53,7 @@ def cov_diff(X, groups):
         covs.append(np.cov(X[groups==g].T))
     return covs
 
-def run_loso_cv_VBM(datasize_idx, VBM=False, SBM=False, classif_name="svm", formula_res = "age+sex+site", N763=False,\
-                    atlas="Destrieux", all_subcortical_rois=False, seven_subcortical_rois=False, TIVscaled=True, save=False):
-    """
-        datasize_idx(int): 0 to 8 included, corresponds to the training dataset size index.
-                            index 0 corresponds to roughly 100 subjects per train set, index 1 to about 175 subjects, ...
-                            and index 8 corresponds to training with a Leave-One-Site-Out CV scheme using all available data
-        classif_name (str): classifier name
-
-        formula_res (str): residualization scheme
-        N763 (bool): if True, use N=763 subjects (those that have data that has been processed for both VBM and SBM)
-        TIVscaled (bool): applicable to SBM roi only (whether the ROI are scaled with regards to TIV),
-                            all VBM roi are scaled with TIV (so that TIV=1500.0)
-        save (bool) : save results file or not
-    
-    subcortical_rois are optional for SBM roi
-    ROIs being scaled by TIV is optional for SBM roi
-    atlas = "Destrieux" or "Desikan" for SBM roi (always Neuromorphometrics for VBM roi)
-    """
-    assert atlas in ["Destrieux","Desikan","Neuromorphometrics"], "wrong atlas name"
-    assert VBM or SBM,"it is required to choose between VBM or SBM roi"
-    assert not (VBM and SBM),"it is required to choose between VBM or SBM roi"
-
-    if VBM :
-        dfroi = pd.read_csv(ROI_VBM_FILE)
-        dfroi = remove_zeros(dfroi) # remove rois with values equal to zeros across all participants
-        list_rois_ = [r for r in dfroi.columns if r.endswith("_CSF_Vol") or r.endswith("_GM_Vol")]
-        assert len(list_rois_)==280, "there should be 280 rois"
-        if N763: dfroi = dfroi[dfroi["SBMandVBM"]] # select participants with both preprocessings
-        run_loso_cv(dfroi, list_rois_, datasize_idx, classif_name=classif_name, formula_res = formula_res, N763=False)
-
-    if SBM: 
-        N763=True
-        assert atlas!="Neuromorphometrics","VBM atlas, not for SBM roi"
-
-        if not TIVscaled:
-                filepath = ROI_SBM_FILE_Destrieux if atlas=="Destrieux" else ROI_SBM_FILE_Desikan
-        else: 
-            filepath = ROI_SBM_FILE_Destrieux_TIV_scaled if atlas=="Destrieux" else ROI_SBM_FILE_Desikan_TIVscaled
-
-        dfroi = pd.read_csv(filepath)
-
-        list_cols = list(dfroi.columns)
-        # print(list_cols)
-
-        if not all_subcortical_rois:
-            list_cols = list(dfroi.columns)
-            # case in which we have no subcortical rois at all
-            if not seven_subcortical_rois: dfroi = dfroi[[r for r in list_cols if r not in all_subcortical_rois_sbm]]
-            # case in which we have 7 subcortical rois per hemisphere (replication of Nunes et al)
-            else: 
-                subcortical_rois_not_in_list_of_seven = [r for r in all_subcortical_rois_sbm if r not in seven_subcortical_roi_sbm]
-                dfroi = dfroi[[r for r in list_cols if r not in subcortical_rois_not_in_list_of_seven]]
-            list_cols = list(dfroi.columns)
-
-        list_lrn_curv_splits = ["lrn_curv_x"+str(i)+"_"+site for i in range(8) for site in get_predict_sites_list()]
-        list_lrn_curv_splits = list_lrn_curv_splits+["lrn_curv_x8"]
-        other_elements = ["participant_id","session","age","sex","site","TIV","dx"]+list_lrn_curv_splits
-        list_rois_ = [r for r in list_cols if r not in other_elements]
-        
-        added_sub=0
-
-        if all_subcortical_rois: added_sub = 34
-        if seven_subcortical_rois: added_sub = 14 
-        if atlas=="Destrieux": assert len(list_rois_) == 296 + added_sub # 74 for each ROI type (area and cortical thickness) for both hemispheres
-        if atlas=="Desikan": assert len(list_rois_) == 136 + added_sub # 34 for each ROI type (area and cortical thickness) for both hemispheres
-              
-        results_dict = run_loso_cv(dfroi, list_rois_, datasize_idx, classif_name=classif_name, formula_res = "age+sex+site", N763=False)
-        if SBM:
-            if not (all_subcortical_rois or seven_subcortical_rois): 
-                strsub = "_no_subcortical"
-                folder = "no_subcortical/"
-            else: 
-                if seven_subcortical_rois: 
-                    strsub = "_7subROI"
-                    folder = "with7subcorticalROI/"
-                else : 
-                    strsub = ""
-                    folder = ""
-            datasizes = [75, 150, 200, 300, 400, 450, 500, 600, 700]
-            results_file = RESULTSFOLDER+folder+str(classif_name)+"_N"+str(datasizes[datasize_idx])+"_"+atlas+"_SBM_ROI"+strsub+"_N763.pkl"
-        if VBM:
-            if not N763: datasizes = [100,175,250,350,400,500,600,700,800]
-            else : datasizes = [75, 150, 200, 300, 400, 450, 500, 600, 700]
-            create_folder_if_not_exists(RESULTSFOLDER+"/stacking")
-            create_folder_if_not_exists(RESULTSFOLDER+"/stacking/SVMRBF_VBMROI")
-            results_file = RESULTSFOLDER+"stacking/SVMRBF_VBMROI/scores_tr_te_N861_train_size_N"+str(datasizes[datasize_idx])+".pkl"
-            print(results_file)
-            if not os.path.exists(results_file):
-                print("saving scores for stacking ...")
-        if save:
-            print("\nsaving classification results ...")
-            save_pkl(results_dict, results_file)
-
-
-
-def run_loso_cv(dfroi, list_rois, datasize_idx, classif_name="svm", formula_res = "age+sex+site", N763=False):
+def classify(dfroi, list_rois, datasize_idx, classif_name="svm", formula_res = "age+sex+site", N763=False):
     """
         datasize_idx(int): 0 to 8 included, corresponds to the training dataset size index.
                             index 0 corresponds to roughly 100 subjects per train set, index 1 to about 175 subjects, ...
@@ -165,6 +72,12 @@ def run_loso_cv(dfroi, list_rois, datasize_idx, classif_name="svm", formula_res 
     results_dict = {}
     for site in sites:
         # Test set = all from test site
+        """
+        # how to test on only test set from N763 when training can be done on N861 train set
+        # useful for meta-model
+        dfroi_metamodel = dfroi[dfroi["SBMandVBM"]]
+        test_df = dfroi_metamodel[dfroi_metamodel["site"]==site].copy()
+        """
         test_df = dfroi[dfroi["site"] == site].copy()
 
         # Training set = subset defined by datasize_idx for this test site
@@ -186,7 +99,7 @@ def run_loso_cv(dfroi, list_rois, datasize_idx, classif_name="svm", formula_res 
         participants_test = test_df["participant_id"].values
 
         if formula_res:
-            residualizer = Residualizer(data=combined_df[list_rois+["age","sex","site","dx"]], formula_res=formula_res, formula_full="age+sex+site+dx")
+            residualizer = Residualizer(data=combined_df[list_rois+["age","sex","site","dx"]], formula_res=formula_res, formula_full=formula_res+"+dx")
             Zres = residualizer.get_design_mat(combined_df[list_rois+["age","sex","site","dx"]])
 
             residualizer.fit(X_train, Zres[:len(X_train)])
@@ -230,7 +143,8 @@ def run_loso_cv(dfroi, list_rois, datasize_idx, classif_name="svm", formula_res 
         bacc = balanced_accuracy_score(y_test, y_pred)
 
         results_dict[site] = {"roc_auc": roc_auc, "balanced-accuracy":bacc,"score test": score_test,"score train": score_train, \
-                                    "participant_ids_te":participants_test, "participant_ids_tr":participants_train}
+                                    "participant_ids_te":participants_test, "participant_ids_tr":participants_train,\
+                                        "y_train": y_train, "y_test":y_test}
 
     print("AUC per site:", [results_dict[site]["roc_auc"] for site in sites])
     results_dict["mean over all sites"] = {"roc_auc": np.mean([results_dict[site]["roc_auc"] for site in sites]),\
@@ -239,12 +153,112 @@ def run_loso_cv(dfroi, list_rois, datasize_idx, classif_name="svm", formula_res 
 
     return results_dict
 
-def main():
-    # run_loso_cv_VBM(8, VBM=False, SBM=True, classif_name="EN", formula_res = "age+sex+site", N763=True,\
-    #                 atlas="Desikan", all_subcortical_rois=True, TIVscaled=True)
+def run_loso_cv_roi(datasize_idx, VBM=False, SBM=False, classif_name="svm", formula_res = "age+sex+site", N763=False,\
+                    atlas="Destrieux", all_subcortical_rois=False, seven_subcortical_rois=False, TIVscaled=True, save=False, dataidx=False):
+    """
+        datasize_idx(int): 0 to 8 included, corresponds to the training dataset size index.
+                            index 0 corresponds to roughly 100 subjects per train set, index 1 to about 175 subjects, ...
+                            and index 8 corresponds to training with a Leave-One-Site-Out CV scheme using all available data
+        classif_name (str): classifier name
+
+        formula_res (str): residualization scheme
+        N763 (bool): if True, use N=763 subjects (those that have data that has been processed for both VBM and SBM)
+        TIVscaled (bool): applicable to SBM roi only (whether the ROI are scaled with regards to TIV),
+                            all VBM roi are scaled with TIV (so that TIV=1500.0)
+        save (bool) : save results file or not
+        dataidx (bool) : when saving, save the dataidx instead of the approximate data size
     
-    run_loso_cv_VBM(8, VBM=False, SBM=True, classif_name="EN", formula_res = "age+sex+site", N763=True,\
-                    atlas="Destrieux", seven_subcortical_rois=True, TIVscaled=False)
+    subcortical_rois are optional for SBM roi
+    ROIs being scaled by TIV is optional for SBM roi
+    atlas = "Destrieux" or "Desikan" for SBM roi (always Neuromorphometrics for VBM roi)
+    """
+    assert atlas in ["Destrieux","Desikan","Neuromorphometrics"], "wrong atlas name"
+    assert VBM or SBM,"it is required to choose between VBM or SBM roi"
+    assert not (VBM and SBM),"it is required to choose between VBM or SBM roi"
+
+    if VBM :
+        dfroi = pd.read_csv(ROI_VBM_FILE)
+        dfroi = remove_zeros(dfroi) # remove rois with values equal to zeros across all participants
+        list_rois_ = [r for r in dfroi.columns if r.endswith("_CSF_Vol") or r.endswith("_GM_Vol")]
+        assert len(list_rois_)==280, "there should be 280 rois"
+        if N763: dfroi = dfroi[dfroi["SBMandVBM"]] # select participants with both preprocessings
+        
+        results_dict = classify(dfroi, list_rois_, datasize_idx, classif_name=classif_name, formula_res = formula_res, N763=False)
+
+        if not N763: datasizes = [100,175,250,350,400,500,600,700,800]
+        else : datasizes = [75, 150, 200, 300, 400, 450, 500, 600, 700]
+        if dataidx: 
+            """
+            # for meta-model (change saving directory and specify "vbm_roi" in file name)
+            folder=ROOT+"results_classif/meta_model/"
+            results_file = folder+"scores_tr_te_N861_train_size_N"+str(datasize_idx)+"_vbmroi.pkl"
+            """
+            results_file = RESULTSFOLDER_VBM+"scores_tr_te_N861_train_size_N"+str(datasize_idx)+".pkl"
+        else : results_file = RESULTSFOLDER_VBM+"scores_tr_te_N861_train_size_N"+str(datasizes[datasize_idx])+".pkl"
+        print(results_file)
+
+    if SBM: 
+        N763=True
+        assert atlas!="Neuromorphometrics","VBM atlas, not for SBM roi"
+
+        if not TIVscaled:
+                filepath = ROI_SBM_FILE_Destrieux if atlas=="Destrieux" else ROI_SBM_FILE_Desikan
+        else: 
+            filepath = ROI_SBM_FILE_Destrieux_TIV_scaled if atlas=="Destrieux" else ROI_SBM_FILE_Desikan_TIVscaled
+
+        dfroi = pd.read_csv(filepath)
+
+        list_cols = list(dfroi.columns)
+        # print(list_cols)
+
+        if not all_subcortical_rois:
+            list_cols = list(dfroi.columns)
+            # case in which we have no subcortical rois at all
+            if not seven_subcortical_rois: dfroi = dfroi[[r for r in list_cols if r not in all_subcortical_rois_sbm]]
+            # case in which we have 7 subcortical rois per hemisphere (replication of Nunes et al)
+            else: 
+                subcortical_rois_not_in_list_of_seven = [r for r in all_subcortical_rois_sbm if r not in seven_subcortical_roi_sbm]
+                dfroi = dfroi[[r for r in list_cols if r not in subcortical_rois_not_in_list_of_seven]]
+            list_cols = list(dfroi.columns)
+
+        list_lrn_curv_splits = ["lrn_curv_x"+str(i)+"_"+site for i in range(8) for site in get_predict_sites_list()]
+        list_lrn_curv_splits = list_lrn_curv_splits+["lrn_curv_x8"]
+        other_elements = ["participant_id","session","age","sex","site","TIV","dx"]+list_lrn_curv_splits
+        list_rois_ = [r for r in list_cols if r not in other_elements]
+        
+        added_sub=0
+
+        if all_subcortical_rois: added_sub = 34
+        if seven_subcortical_rois: added_sub = 14 
+        if atlas=="Destrieux": assert len(list_rois_) == 296 + added_sub # 74 for each ROI type (area and cortical thickness) for both hemispheres
+        if atlas=="Desikan": assert len(list_rois_) == 136 + added_sub # 34 for each ROI type (area and cortical thickness) for both hemispheres
+              
+        results_dict = classify(dfroi, list_rois_, datasize_idx, classif_name=classif_name, formula_res = formula_res, N763=False)
+        if not (all_subcortical_rois or seven_subcortical_rois): 
+            strsub = "_no_subcortical"
+            folder = "no_subcortical/"
+        else: 
+            if seven_subcortical_rois: 
+                strsub = "_7subROI"
+                folder = "with7subcorticalROI/"
+            else : 
+                strsub = ""
+                folder = ""
+        if dataidx: results_file = RESULTSFOLDER_SBM+folder+str(classif_name)+"_N"+str(datasize_idx)+"_"+atlas+"_SBM_ROI"+strsub+"_N763.pkl"
+        else:
+            datasizes = [75, 150, 200, 300, 400, 450, 500, 600, 700]
+            results_file = RESULTSFOLDER_SBM+folder+str(classif_name)+"_N"+str(datasizes[datasize_idx])+"_"+atlas+"_SBM_ROI"+strsub+"_N763.pkl"
+
+    if save:
+        print("\nsaving classification results ...")
+        save_pkl(results_dict, results_file)
+
+
+def main():
+    
+    for dataidx in [0,1,2,3,4,5,6,7,8]:
+        run_loso_cv_roi(dataidx, VBM=True, SBM=False, classif_name="svm", formula_res = "age+sex+site", N763=False,\
+                        atlas="Neuromorphometrics",save=True, dataidx=True)
     quit()
     run_loso_cv(8, classif_name="L2LR", N763=True, formula_res="age+sex+site")
 

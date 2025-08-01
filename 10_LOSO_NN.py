@@ -55,6 +55,8 @@ def get_state_dict(path):
             state dictionary of the model.
     """
 
+    assert path.endswith(".pth"),"wrong file type. expecting pth file."
+
     if torch.cuda.is_available() and torch.cuda.device_count()>0: 
         state_dict = torch.load(path)
     else : 
@@ -330,12 +332,12 @@ def test(model, loss_fn, loader: DataLoader, **args):
                     targets_list.append(item.to(args["device"]))
                     y_true.extend(item.cpu().numpy())
 
-            targets = targets_list[0] if len(targets_list) == 1 else targets_list if targets_list else None
-
             outputs = model(inputs)
 
-            if targets is not None:
-                batch_loss = loss_fn(outputs, targets_list)
+            if targets_list:
+                targets_tensor = torch.cat(targets_list, dim=0)  # or torch.stack() depending on shape
+
+                batch_loss = loss_fn(outputs, targets_tensor)
                 total_loss += batch_loss.item() / nb_batches
 
             y.extend(outputs.cpu().numpy())
@@ -536,9 +538,6 @@ def run(site, nb_epochs_per_saving=10, model_to_test_path = None, **args):
 
     return results_test
 
-
-
-
 def main():
     parser = argparse.ArgumentParser()
 
@@ -614,6 +613,15 @@ def main():
     # Run experiments
     print(f"Sites to run: {sites}")
     site_results = []
+
+    # if we only wish to test a pretrained model, we must test it on the right LOSO CV test fold (one per model)
+    # otherwise, we would have abnormaly high performance metrics due to data leakage (training on a site and then testing on it)
+    if args.model_to_test_path: 
+        for site in get_predict_sites_list():
+            if site in args.model_to_test_path: 
+                print("testing only on LOSO site ", site)
+                sites = [site]
+
     for site in sites:
         results_test = run(site=site, model_to_test_path=args.model_to_test_path, **config)
         site_results.append({"site": site, "values": results_test})

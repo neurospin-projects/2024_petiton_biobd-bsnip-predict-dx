@@ -10,6 +10,7 @@ results_classif/
 testfolder/
 results_feat_imptce_and_univ_stats/
 get_openbhb_sbm_subcortical.py
+2022_cambroise_surfaugment/
 .gitignore
 .gitattributes
 

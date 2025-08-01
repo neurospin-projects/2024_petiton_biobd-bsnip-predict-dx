@@ -1,12 +1,10 @@
 import pandas as pd, numpy as np
-import sys, os
+import sys
 
 sys.path.append('/neurospin/psy_sbox/temp_sara/')
 from pylearn_mulm.mulm.residualizer import Residualizer
-from nitk.ml_utils.residualization import get_residualizer
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import cross_val_score
 from sklearn.metrics import roc_auc_score, balanced_accuracy_score
 
 

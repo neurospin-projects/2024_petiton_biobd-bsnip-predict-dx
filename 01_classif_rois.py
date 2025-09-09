@@ -9,7 +9,7 @@ from sklearn.metrics import roc_auc_score, balanced_accuracy_score
 
 
 from utils import get_classifier, get_scores_pipeline, get_predict_sites_list, read_pkl, save_pkl, \
-    create_folder_if_not_exists
+    create_folder_if_not_exists, remove_zeros
 
 
 # inputs
@@ -36,13 +36,7 @@ RESULTSFOLDER=ROOT+"results_classif/"
 RESULTSFOLDER_SBM=RESULTSFOLDER+"classifSBM/"
 RESULTSFOLDER_VBM=RESULTSFOLDER+"classifVBM/"
 
-def remove_zeros(df, verbose=False):
-        columns_with_only_zeros = df.columns[(df == 0).all()]
-        if verbose : print("columns with zeros ",columns_with_only_zeros)
-        column_indices = [df.columns.get_loc(col) for col in columns_with_only_zeros]
-        assert set(columns_with_only_zeros) <= {'lInfLatVen_GM_Vol', 'lOC_GM_Vol', 'lInfLatVen_CSF_Vol', 'lOC_CSF_Vol'}
-        df = df.drop(columns=columns_with_only_zeros)
-        return df
+
 
 def cov_diff(X, groups):
     unique_g = np.unique(groups)
@@ -152,7 +146,7 @@ def classify(dfroi, list_rois, datasize_idx, classif_name="svm", formula_res = "
     return results_dict
 
 def run_loso_cv_roi(datasize_idx, VBM=False, SBM=False, classif_name="svm", formula_res = "age+sex+site", N763=False,\
-                    atlas="Destrieux", all_subcortical_rois=False, seven_subcortical_rois=False, TIVscaled=True, save=False, dataidx=False):
+                    atlas="Destrieux", all_subcortical_rois=False, seven_subcortical_rois=False, TIVscaled=False, save=False, dataidx=False):
     """
         datasize_idx(int): 0 to 8 included, corresponds to the training dataset size index.
                             index 0 corresponds to roughly 100 subjects per train set, index 1 to about 175 subjects, ...
@@ -180,7 +174,7 @@ def run_loso_cv_roi(datasize_idx, VBM=False, SBM=False, classif_name="svm", form
         list_rois_ = [r for r in dfroi.columns if r.endswith("_CSF_Vol") or r.endswith("_GM_Vol")]
         assert len(list_rois_)==280, "there should be 280 rois"
         if N763: dfroi = dfroi[dfroi["SBMandVBM"]] # select participants with both preprocessings
-        
+        str_dataset_size = "N763" if N763 else "N861"
         results_dict = classify(dfroi, list_rois_, datasize_idx, classif_name=classif_name, formula_res = formula_res, N763=False)
 
         if not N763: datasizes = [100,175,250,350,400,500,600,700,800]
@@ -189,10 +183,12 @@ def run_loso_cv_roi(datasize_idx, VBM=False, SBM=False, classif_name="svm", form
             """
             # for meta-model (change saving directory and specify "vbm_roi" in file name)
             folder=ROOT+"results_classif/meta_model/"
-            results_file = folder+"scores_tr_te_N861_train_size_N"+str(datasize_idx)+"_vbmroi.pkl"
             """
-            results_file = RESULTSFOLDER_VBM+"scores_tr_te_N861_train_size_N"+str(datasize_idx)+".pkl"
-        else : results_file = RESULTSFOLDER_VBM+"scores_tr_te_N861_train_size_N"+str(datasizes[datasize_idx])+".pkl"
+            assert classif_name=="svm","for the meta-model, we only want SVM RBF for VBM ROI features"
+            folder = ROOT+"results_classif/meta_model/"
+            results_file = folder+"scores_tr_te_"+str_dataset_size+"_train_size_N"+str(datasize_idx)+"_vbmroi.pkl"
+        else : results_file = RESULTSFOLDER_VBM+str(classif_name)+"_N"+str(datasizes[datasize_idx])+"_Neuromorphometrics_VBM_ROI_"+str_dataset_size+".pkl"
+
         print(results_file)
 
     if SBM: 
@@ -242,7 +238,13 @@ def run_loso_cv_roi(datasize_idx, VBM=False, SBM=False, classif_name="svm", form
             else : 
                 strsub = ""
                 folder = ""
-        if dataidx: results_file = RESULTSFOLDER_SBM+folder+str(classif_name)+"_N"+str(datasize_idx)+"_"+atlas+"_SBM_ROI"+strsub+"_N763.pkl"
+        if dataidx: 
+            """
+            for meta-model without data imputation : change RESULTSFOLDER_SBM to folder=ROOT+"results_classif/meta_model/"
+            """
+            folder=ROOT+"results_classif/meta_model/"
+            results_file = folder+str(classif_name)+"_N"+str(datasize_idx)+"_"+atlas+"_SBM_ROI"+strsub+"_N763.pkl"
+            # results_file = RESULTSFOLDER_SBM+folder+str(classif_name)+"_N"+str(datasize_idx)+"_"+atlas+"_SBM_ROI"+strsub+"_N763.pkl"
         else:
             datasizes = [75, 150, 200, 300, 400, 450, 500, 600, 700]
             results_file = RESULTSFOLDER_SBM+folder+str(classif_name)+"_N"+str(datasizes[datasize_idx])+"_"+atlas+"_SBM_ROI"+strsub+"_N763.pkl"
@@ -253,9 +255,13 @@ def run_loso_cv_roi(datasize_idx, VBM=False, SBM=False, classif_name="svm", form
 
 
 def main():
-    
-    for dataidx in [0,1,2,3,4,5,6,7,8]:
-        run_loso_cv_roi(dataidx, VBM=True, SBM=False, classif_name="svm", formula_res = "age+sex+site", N763=False,\
+    # to train and save classifiers for the meta model: 
+    for idx in [0,1,2,3,4,5,6,7,8]:
+        run_loso_cv_roi(idx, VBM=False, SBM=True, classif_name="EN", formula_res = "age+sex+site", N763=True,\
+                            atlas="Destrieux",save=True, dataidx=True, all_subcortical_rois=True)
+    quit() 
+    for idx in [0,1,2,3,4,5,6,7,8]:
+        run_loso_cv_roi(idx, VBM=True, SBM=False, classif_name="svm", formula_res = "age+sex+site", N763=False,\
                         atlas="Neuromorphometrics",save=True, dataidx=True)
     quit()
     run_loso_cv(8, classif_name="L2LR", N763=True, formula_res="age+sex+site")

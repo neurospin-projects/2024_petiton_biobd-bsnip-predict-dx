@@ -8,18 +8,18 @@ import seaborn as sns
 import re
 from scipy.stats import ttest_1samp
 from sklearn.metrics import roc_auc_score, balanced_accuracy_score
-from classif_VBMROI import remove_zeros
 from matplotlib.lines import Line2D
-from df_results_and_learning_curves import get_list_mean_and_std, plot_line
+from save_df_results_and_plot_learning_curves import get_list_mean_and_std, plot_line
 from utils import get_participants, get_predict_sites_list,save_pkl, has_nan, has_inf, has_zero, has_zeros_col, \
-        get_LOSO_CV_splits_N861, get_LOSO_CV_splits_N763, create_folder_if_not_exists, get_classifier, get_scores, read_pkl
+        get_LOSO_CV_splits_N861, get_LOSO_CV_splits_N763, create_folder_if_not_exists, get_classifier, get_scores, read_pkl, \
+            remove_zeros
 sys.path.append('/neurospin/psy_sbox/temp_sara/')
 from pylearn_mulm.mulm.residualizer import Residualizer
 
 ROOT= "/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/"
 DATAFOLDER= ROOT+"data/processed/"
 NEUROMORPHOMETRICS_LABELS="/neurospin/hc/openBHB/resource/cat12vbm_labels.txt"
-PATH_ALL_CLASSIF_DF = ROOT+"esults_classif/all_classification_results_dataframe.pkl"
+PATH_ALL_CLASSIF_DF = ROOT+"results_classif/all_classification_results_dataframe.pkl"
 PATH_ZSCORES_CLASSIF_DF = ROOT+"results_classif/zscores_classification_results_dataframe.csv"
 
 def get_roi_labels():
@@ -65,7 +65,7 @@ def get_VBM_data(datasize, N763=True):
     # reorder VBMdf to have rows in the same order as participants_VBM
     VBMdf = VBMdf.set_index('participant_id').reindex(participants_VBM["participant_id"].values).reset_index()
 
-    return participants_VBM, VBMdf,residualizer, Zres, splits
+    return participants_VBM, VBMdf, residualizer, Zres, splits
 
 def get_VBM_data_for_current_site(site, datasize, participants_VBM, VBMdf, residualizer, Zres, splits, return_labels=False):
     # get training and testing ROI dataframes (contains participant_id + TIV in addition to 330 ROIs)
@@ -629,7 +629,6 @@ def run_classification(classif="svm", N763 = True, VBM=True, SBM=False, seven_su
         if VBM : modelname="blr_VBM_Neuromorphometrics"  
         if SBM : modelname = "blr_SBM_"+atlas_SBM
         
-
         if VBM :
             X_train, X_test, rois_train, rois_test , covariates_tr, covariates_te, y_tr, y_te = \
                 get_VBM_data_for_current_site(site, datasize, participants_VBM, roisdf, residualizer, Zres, splits,return_labels=True)
@@ -805,6 +804,70 @@ def get_dataframe_zscores(N763=True, include_subcorticalROI=True, atlas_SBM="Des
 
     return results
 
+def plot_roi_vs_nm_comparison(metric="roc_auc", N763=True):
+    """
+    Simple plot comparing ROI vs NM features for SBM (EN) and VBM (SVM) classifiers
+    """
+    N_values = [75, 150, 200, 300, 400, 450, 500, 600, 700] if N763 else [100,175,250,350,400,500,600,700,800]
+    dataset = "N763" if N763 else "N861"
+    
+    results_zscores = pd.read_csv(PATH_ZSCORES_CLASSIF_DF)
+    results_all = read_pkl(PATH_ALL_CLASSIF_DF)
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    deep_palette = sns.color_palette("deep")
+
+    color_dict={
+        "EN" : deep_palette[1],
+        "svm" : deep_palette[4],
+    }
+
+    label_dict={
+        "EN" : "EN",
+        "svm" : "SVM-RBF",
+    }
+
+    # Plot SBM with EN classifier
+    sbm_roi, _, sbmaucROI = get_list_mean_and_std(results_all, "EN", "SBM_ROI", "Destrieux", metric, dataset)
+    sbm_nm, _, sbm_auczscores= get_list_mean_and_std(results_zscores, "EN", "zscores_SBM_ROI", "Destrieux", metric, dataset)
+
+    plot_line(sbm_roi, N_values, color_dict, "EN", label_dict, 0, cpt=0, linestyle_="solid",alpha=1)
+    diffauc_sbm = sbmaucROI-sbm_auczscores
+    plot_line(sbm_nm, N_values, color_dict, "EN", label_dict, diffauc_sbm, cpt=1, linestyle_="dashed",alpha=1)
+    
+    # Plot VBM with SVM classifier
+    vbm_roi, _, vbmaucROI = get_list_mean_and_std(results_all, "svm", "VBM_ROI", "Neuromorphometrics", metric, dataset)
+    vbm_nm, _, vbm_auczscores = get_list_mean_and_std(results_zscores, "svm", "zscores_VBM_ROI", "Neuromorphometrics", metric, dataset)
+    diffauc_vbm = vbmaucROI-vbm_auczscores
+    plot_line(vbm_roi, N_values, color_dict, "svm", label_dict, 0, cpt=0, linestyle_="solid",alpha=1)
+    plot_line(vbm_nm, N_values, color_dict, "svm", label_dict, diffauc_vbm, cpt=1, linestyle_="dashed",alpha=1)
+
+    
+    ax.set_xlabel("training dataset size", fontsize=25)
+    ax.set_ylabel(f"Mean {metric.upper().replace('_', '-')} over LOSO test sites", fontsize=25)
+    ax.set_title("Normative Modeling (z-scores) vs ROI features - classification performance", fontsize=30)
+    ax.legend()
+    ax.grid(True)
+    ax = plt.gca()
+    legend1 = ax.legend(loc="upper left", bbox_to_anchor=(0, 1), fontsize=20)
+
+    # adding the legend for dashed vs straigt lines for zscores vs ROI
+    line = Line2D([0], [0], color='grey', linestyle='dashed')
+    line.set_linewidth(4) # choose width of grey line in legend
+    line_gray = Line2D([0], [0], color='grey', label='Regular Gray Line')
+    line_gray.set_linewidth(4)
+
+    list_legend = [f"AUC : VBM ROI ({np.round(vbmaucROI,2)}), SBM ROI ({np.round(sbmaucROI,2)})",\
+                   f"AUC : VBM NM ({np.round(vbm_auczscores,2)}), SBM NM ({np.round(sbm_auczscores,2)})"]
+
+    legend2 = ax.legend([line_gray, line], list_legend, loc="upper left", bbox_to_anchor=(0, 0.15), fontsize=20)
+    ax.add_artist(legend1)
+    ax.add_artist(legend2)
+    plt.xticks(fontsize=22)
+    plt.yticks(fontsize=22)
+    plt.tight_layout()
+    plt.show()
+
 def plot_learning_curves(metric="roc_auc", N763=True, SBM=False, VBM=False, include_subcorticalROI=True, \
                          seven_subcortical_Nunes_replicate=False, atlas_SBM="Destrieux"):
     
@@ -901,7 +964,6 @@ def plot_learning_curves(metric="roc_auc", N763=True, SBM=False, VBM=False, incl
         means = np.array(means)
         stds= np.array(stds)
         ax1 = plt.gca()
-    quit()
 
     ax1.set_xlabel("training dataset size", fontsize=25)
     if metric=="roc_auc": ax1.set_ylabel("Mean ROC-AUC over LOSO test sites", fontsize=25)
@@ -1124,8 +1186,11 @@ def read_supplementary_results(concatenateOpenBHBBIOBDBSNIP=True, onlyBIOBDBSNIP
 """
 
 def main():
+    plot_roi_vs_nm_comparison()
+    quit()
     
     plot_learning_curves(VBM=True)
+    quit()
     ttests_comparisons_zscores_ROI(metric = "roc_auc", SBM=True)
     ttests_comparisons_zscores_ROI(metric = "balanced_accuracy", VBM=True)
     ttests_comparisons_zscores_ROI(metric = "balanced_accuracy", SBM=True)

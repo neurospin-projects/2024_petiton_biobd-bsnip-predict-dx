@@ -9,14 +9,14 @@ from torch.utils.data import DataLoader, RandomSampler
 from torchvision.transforms.transforms import Compose
 
 # model backbones
-from deep_learning_vbm.densenet import densenet121
-from deep_learning_vbm.alexnet import AlexNet3D_Dropout
+from densenet import densenet121
+from alexnet import AlexNet3D_Dropout
 
 # data transforms
-from deep_learning_vbm.transforms import Crop, Padding, Normalize
+from transforms import Crop, Padding, Normalize
 
 # dataset
-from deep_learning_vbm.BD_dataset import BipolarDataset
+from BD_dataset import BipolarDataset
 
 # model performance evaluation
 from sklearn.metrics import roc_auc_score, balanced_accuracy_score
@@ -34,7 +34,7 @@ from utils import get_predict_sites_list, create_folder_if_not_exists
 
 #inputs
 ROOT="/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/"
-PRETRAINING_MODEL="/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/models/VBM_TL/DenseNet_HCP_IXI_window-0.25_0_epoch_30.pth"
+PRETRAINING_MODEL="/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/models/TL/DenseNet_HCP_IXI_window-0.25_0_epoch_30.pth"
 
 #outputs
 OUTPUT_DIR=ROOT+"testfolder/"
@@ -171,14 +171,14 @@ def get_dataloader(site_, train=False, test=False, **args):
     testloader, trainloader = None, None
 
     if train:
-        dataset["train"] = BipolarDataset(site=site_, preproc="vbm", split="train", transforms=input_transforms, datasize_idx=args["datasize_idx"], N763=args["N763"])
+        dataset["train"] = BipolarDataset(site=site_, preproc="vbm", split="train", transforms=input_transforms, datasize_idx=args["datasize_idx"])
         trainloader = DataLoader(
             dataset["train"], batch_size=args['batch_size'], sampler=RandomSampler(dataset["train"]),
             collate_fn=collate_fn, num_workers= 3, pin_memory=True, drop_last=False)        
         print('...train dataset :', type(dataset['train']), np.shape(dataset['train']),"...")
 
     if test :
-        dataset["test"] = BipolarDataset(site=site_,preproc="vbm", split="test",transforms=input_transforms, datasize_idx=args["datasize_idx"],N763=args["N763"])   
+        dataset["test"] = BipolarDataset(site=site_,preproc="vbm", split="test",transforms=input_transforms, datasize_idx=args["datasize_idx"])   
         testloader = DataLoader(
             dataset["test"], batch_size= args['batch_size'], 
             collate_fn = collate_fn, num_workers= 3, pin_memory=True, drop_last=False)
@@ -218,7 +218,7 @@ def train(model, optimizer, loss_fn, loader, epoch=None, device=None, verbose=Tr
     if device is not None: model.to(device)
     model.train()
 
-    pbar = tqdm(total=len(loader), desc=f"Mini-batch epoch {epoch} training", leave=False)
+    pbar = tqdm(total=len(loader), desc=f"Mini-bacth epoch {epoch} training", leave=False)
     # leave=False to clear the progress bar once it reaches 100% to keep only final output (keeps logs clean)
 
     losses, y_pred, y_true, indices_all = [], [], [], []
@@ -491,9 +491,8 @@ def run(site, nb_epochs_per_saving=10, model_to_test_path = None, **args):
             # Save checkpoint
             if checkpoint_dir and (epoch % nb_epochs_per_saving == 0 or epoch == nb_epochs - 1) and epoch > 0:
                 os.makedirs(checkpoint_dir, exist_ok=True)
-                if epoch == nb_epochs - 1 : 
-                    checkpoint(site, model, epoch, checkpoint_dir, args["exp_name"], optimizer)
-                    save_metrics(checkpoint_dir, epoch, train_metrics, site, split="Train", exp_name=args["exp_name"])
+                checkpoint(site, model, epoch, checkpoint_dir, args["exp_name"], optimizer)
+                save_metrics(checkpoint_dir, epoch, train_metrics, site, split="Train", exp_name=args["exp_name"])
 
         torch.cuda.empty_cache()
 
@@ -521,7 +520,7 @@ def run(site, nb_epochs_per_saving=10, model_to_test_path = None, **args):
         'loss': test_loss,
         'metrics': test_metrics
     }
-    
+
     # Save test metrics if last of 200 epochs
     if model_to_test_path:
         # regex looks for a number between two underscores (_199_…) right before the file extension .pth
@@ -537,40 +536,9 @@ def run(site, nb_epochs_per_saving=10, model_to_test_path = None, **args):
             if epoch == 199:
                 save_metrics(checkpoint_dir, epoch, results_test, site, split="Test", exp_name=args["exp_name"])
 
-    else: save_metrics(checkpoint_dir, epoch, results_test, site, split="Test", exp_name=args["exp_name"])
-
     return results_test
 
 def main():
-    
-    # examples of runs : 
-    # for dataset N763, with transfer learning and transforms, at maximum training set size (datasize_idx 8), results will be saved in N763_classif_VBM_TL_run1 folder,
-    # and the model will run only for LOSO CV test site grenoble:
-    # python3 10_fine_tuning_VBM_voxelwise.py --transforms --transfer --N763 --datasize_idx 8 --checkpoint_dir /neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/N763_classif_VBM_TL_run1 --whichsite grenoble
-
-    # same thing + to run for all test sites at datasize_idx 1: 
-    # python3 10_fine_tuning_VBM_voxelwise.py --transforms --transfer --N763 --datasize_idx 1 --checkpoint_dir /neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/N763_classif_VBM_TL_run1 
-   
-    # python3 10_fine_tuning_VBM_voxelwise.py --transforms --transfer --N763 --datasize_idx 0 --checkpoint_dir /neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/N763_classif_VBM_TL_run2
-    
-    # =================== to run 5 TL models * 12 LOSO CV test sites at all train set sizes ==================
-
-
-    # =================== to test pretrained model ==================
-    # for site in "${sites[@]}"; do
-    #     for i in {0..8}; do
-    #         DIR="/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/N763_classif_VBM_TL_run5"
-    #         DIRMODEL="$DIR/n_$i/densenet121_vbm_bipolar_epoch_199_${site}.pth"
-
-    #         python3 10_fine_tuning_VBM_voxelwise.py \
-    #             --transforms --N763 --datasize_idx $i \
-    #             --checkpoint_dir "$DIR" \
-    #             --model_to_test_path "$DIRMODEL" \
-    #             --whichsite "$site"
-    #     done
-    # done
-
-    
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--transforms", action="store_true", default=True)
@@ -588,7 +556,6 @@ def main():
                                  "grenoble", "geneve"],
                         help="Run LOSO for a single testing site")
     parser.add_argument("--datasize_idx", type=int, default=8, choices=list(range(9)))
-    parser.add_argument("--N763", action="store_true", default=False)
 
     args = parser.parse_args()
 
@@ -606,8 +573,7 @@ def main():
         "device": "cuda" if torch.cuda.is_available() else "cpu",
         "transforms": args.transforms,
         "transfer_path": PRETRAINING_MODEL if args.transfer else None,
-        "datasize_idx": args.datasize_idx,
-        "N763":args.N763
+        "datasize_idx": args.datasize_idx
     }
 
     # Adjust batch size if transfer mode with specific datasize
@@ -620,7 +586,6 @@ def main():
     print(f"Epochs: {config['nb_epochs']}")
     print(f"Transfer path: {config['transfer_path']}")
     print(f"Model architecture: {config['net']}")
-    print(f"N763 = ",config["N763"])
 
     # Determine sites to test
     sites = [args.whichsite] if args.whichsite else get_predict_sites_list()

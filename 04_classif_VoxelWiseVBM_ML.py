@@ -104,8 +104,6 @@ def load_images(site, df_Xim_with_participant_names, datasize = 800):
             "Zres_tr":Zres_tr, "Zres_te": Zres_te, "residualizer":residualizer}
 
 
-
-
 def classif_voxelwise_VBM(classif="svm", datasize=800, save=False):
     assert classif in ["svm", "MLP", "EN", "L2LR", "xgboost"]
     df_all_data = get_all_data()
@@ -173,7 +171,7 @@ def classif_voxelwise_VBM(classif="svm", datasize=800, save=False):
         cpt+=1
     
     if save:
-        results_file = RESULTSFOLDER+"classifVoxelWise/"+classif+"_N"+str(datasize)+"_Neuromorphometrics_VBM_ROI_N861.pkl"
+        results_file = RESULTSFOLDER+"classifVoxelWise/"+classif+"_N"+str(datasize)+"_VBM_voxelwise_N861.pkl"
         print("\nsaving classification results ...")
         save_pkl(metrics_dict, results_file)
 

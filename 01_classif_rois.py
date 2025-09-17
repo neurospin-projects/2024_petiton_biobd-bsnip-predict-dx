@@ -45,7 +45,7 @@ def cov_diff(X, groups):
         covs.append(np.cov(X[groups==g].T))
     return covs
 
-def classify(dfroi, list_rois, datasize_idx, classif_name="svm", formula_res = "age+sex+site", N763=False):
+def classify(dfroi, list_rois, datasize_idx, classif_name="svm", formula_res = "age+sex+site", N763=False, dataidx=None):
     """
         datasize_idx(int): 0 to 8 included, corresponds to the training dataset size index.
                             index 0 corresponds to roughly 100 subjects per train set, index 1 to about 175 subjects, ...
@@ -131,17 +131,24 @@ def classify(dfroi, list_rois, datasize_idx, classif_name="svm", formula_res = "
         score_test = get_scores_pipeline(pipe, X_test)
         score_train = get_scores_pipeline(pipe, X_train)
 
+
         roc_auc = roc_auc_score(y_test, score_test)
         bacc = balanced_accuracy_score(y_test, y_pred)
 
         results_dict[site] = {"roc_auc": roc_auc, "balanced-accuracy":bacc,"score test": score_test,"score train": score_train, \
                                     "participant_ids_te":participants_test, "participant_ids_tr":participants_train,\
                                         "y_train": y_train, "y_test":y_test}
+        
+        if dataidx and datasize_idx==8 :
+            if classif_name=="svm" or classif_name=="EN":
+                results_dict[site]["probas_test"]= pipe.predict_proba(X_test)[:, 1] #probas of class 1
+                results_dict[site]["probas_train"]= pipe.predict_proba(X_train)[:, 1] #probas of class 1
+
 
     print("AUC per site:", [results_dict[site]["roc_auc"] for site in sites])
     results_dict["mean over all sites"] = {"roc_auc": np.mean([results_dict[site]["roc_auc"] for site in sites]),\
                                             "balanced-accuracy":np.mean([results_dict[site]["balanced-accuracy"] for site in sites])}
-    print("Mean AUC:", np.mean([results_dict[site]["roc_auc"] for site in sites]))
+    print("Mean AUC: ", np.mean([results_dict[site]["roc_auc"] for site in sites]))
 
     return results_dict
 
@@ -175,7 +182,7 @@ def run_loso_cv_roi(datasize_idx, VBM=False, SBM=False, classif_name="svm", form
         assert len(list_rois_)==280, "there should be 280 rois"
         if N763: dfroi = dfroi[dfroi["SBMandVBM"]] # select participants with both preprocessings
         str_dataset_size = "N763" if N763 else "N861"
-        results_dict = classify(dfroi, list_rois_, datasize_idx, classif_name=classif_name, formula_res = formula_res, N763=False)
+        results_dict = classify(dfroi, list_rois_, datasize_idx, classif_name=classif_name, formula_res = formula_res, N763=False, dataidx=dataidx)
 
         if not N763: datasizes = [100,175,250,350,400,500,600,700,800]
         else : datasizes = [75, 150, 200, 300, 400, 450, 500, 600, 700]
@@ -194,14 +201,12 @@ def run_loso_cv_roi(datasize_idx, VBM=False, SBM=False, classif_name="svm", form
     if SBM: 
         N763=True
         assert atlas!="Neuromorphometrics","VBM atlas, not for SBM roi"
-
         if not TIVscaled:
                 filepath = ROI_SBM_FILE_Destrieux if atlas=="Destrieux" else ROI_SBM_FILE_Desikan
         else: 
             filepath = ROI_SBM_FILE_Destrieux_TIV_scaled if atlas=="Destrieux" else ROI_SBM_FILE_Desikan_TIVscaled
 
         dfroi = pd.read_csv(filepath)
-
         list_cols = list(dfroi.columns)
         # print(list_cols)
 
@@ -227,7 +232,7 @@ def run_loso_cv_roi(datasize_idx, VBM=False, SBM=False, classif_name="svm", form
         if atlas=="Destrieux": assert len(list_rois_) == 296 + added_sub # 74 for each ROI type (area and cortical thickness) for both hemispheres
         if atlas=="Desikan": assert len(list_rois_) == 136 + added_sub # 34 for each ROI type (area and cortical thickness) for both hemispheres
               
-        results_dict = classify(dfroi, list_rois_, datasize_idx, classif_name=classif_name, formula_res = formula_res, N763=False)
+        results_dict = classify(dfroi, list_rois_, datasize_idx, classif_name=classif_name, formula_res = formula_res, N763=False, dataidx=dataidx)
         if not (all_subcortical_rois or seven_subcortical_rois): 
             strsub = "_no_subcortical"
             folder = "no_subcortical/"
@@ -256,6 +261,9 @@ def run_loso_cv_roi(datasize_idx, VBM=False, SBM=False, classif_name="svm", form
 
 def main():
     # to train and save classifiers for the meta model: 
+    run_loso_cv_roi(8, VBM=True, SBM=False, classif_name="svm", formula_res = "age+sex+site", N763=True,\
+                            atlas="Neuromorphometrics",save=False, dataidx=True)
+    quit()
     for idx in [0,1,2,3,4,5,6,7,8]:
         run_loso_cv_roi(idx, VBM=False, SBM=True, classif_name="EN", formula_res = "age+sex+site", N763=True,\
                             atlas="Destrieux",save=True, dataidx=True, all_subcortical_rois=True)
@@ -263,17 +271,25 @@ def main():
     for idx in [0,1,2,3,4,5,6,7,8]:
         run_loso_cv_roi(idx, VBM=True, SBM=False, classif_name="svm", formula_res = "age+sex+site", N763=False,\
                         atlas="Neuromorphometrics",save=True, dataidx=True)
-    quit()
-    run_loso_cv(8, classif_name="L2LR", N763=True, formula_res="age+sex+site")
 
     """
-    Nmax=861 for SVM-RBF 
-    MEAN : roc_auc  72.58 balanced-accuracy  65.98
-    STD : roc_auc  8.03 balanced-accuracy  6.72
+    Nmax=861 for SVM-RBF and VBM ROI
+    MEAN (%) : roc_auc  72.58 balanced-accuracy  65.98
+    STD (%) : roc_auc  8.03 balanced-accuracy  6.72
 
-    Nmax=763 for SVM-RBF 
-    MEAN : roc_auc  73.41 balanced-accuracy  68.71
-    STD : roc_auc  8.06 balanced-accuracy  7.14
+    Nmax=763 for SVM-RBF and VBM ROI
+    MEAN (%) : roc_auc  73.41 balanced-accuracy  68.71
+    STD (%) : roc_auc  8.06 balanced-accuracy  7.14
+
+    Nmax=763 for EN and SBM ROI
+    AUC per site (in order of get_predict_sites_list()): 
+    order : "Baltimore", "Boston", "Dallas", "Detroit", "Hartford", "mannheim", "creteil", 
+    "udine", "galway", "pittsburgh", "grenoble", "geneve"
+    [0.7275541795665634, 0.7339506172839506, 0.7161654135338346, 0.7042857142857143,
+      0.6618357487922706, 0.6736842105263159, 0.7058823529411765, 0.7129629629629629, 0.8571428571428571, 
+      0.6335403726708074, 0.5352564102564102, 0.709478021978022]
+    Mean AUC: 0.6976
+
     """
 
     # GroupKFold with cv8

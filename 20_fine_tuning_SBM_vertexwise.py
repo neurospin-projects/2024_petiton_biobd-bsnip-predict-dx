@@ -13,21 +13,22 @@ import pprint
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 
-from new_ssl_models import SimCLRFineTunerMinimal
-from datasets_biobdbsnip import get_dataloader, DataManager
-from data_transforms import create_transforms_for_biobdbsnip
+from deep_learning_sbm.models import SimCLRFineTunerMinimal
+from deep_learning_sbm.datasets_biobdbsnip import get_dataloader, DataManager
+from deep_learning_sbm.data_transforms import create_transforms_for_biobdbsnip
+from deep_learning_sbm.augmentations import Normalize
 
+  
 # ---------- CONFIG ----------
 MODALITIES = ["surface-lh_data", "surface-rh_data"]
-DATA_DIR = "/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/data/processed/"
-ROOT = "/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/2022_cambroise_surfaugment/"
-ENCODER_OUTDIR = ROOT + "y_aware_sigma5_save_encoders/" #y_aware_sigma5_save_encoders/" #"test_with_yawareloss_sigma5/" 
-PRETRAINED_ENCODER = ENCODER_OUTDIR + "ssl_scnns/checkpoints/1755723336/model_epoch_300_encoder.pth" #1755723336/encoder.pth" #1754614034/encoder.pth" #model_epoch_110_
+ROOT = "/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/"
+DATA_DIR = ROOT+"data/processed/"
+PRETRAINED_ENCODER = ROOT + "models/SBM_TL/pretrained_model/model_epoch_300_encoder.pth" #1755723336/encoder.pth" #1754614034/encoder.pth" #model_epoch_110_
 METRICS = ["thickness", "curv", "sulc"]
-SPLITS_PATH = "/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/dict_splits_test_all_trainset_sizes_N763.pkl" #dict_splits_test.pkl"
+SPLITS_PATH = ROOT+"dict_splits_test_all_trainset_sizes_N763.pkl" #dict_splits_test.pkl"
 
 # outputs
-CHECKPOINT_DIR = "/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/checkpoints_finetuning_sbm"
+CHECKPOINT_DIR = ROOT+"checkpoints_finetuning_sbm"
 
 def read_pkl(file_path):
     """Read pickle file."""
@@ -436,6 +437,11 @@ def main(args):
             "test": test_indices
         }
     }
+    normalizer = Normalize(channel_dim=1)
+    normalizer_transform = {
+        "surface-lh_data": normalizer,
+        "surface-rh_data": normalizer
+    }
     
     # Create train and test loaders
     loader = get_dataloader(
@@ -443,7 +449,7 @@ def main(args):
         split_key=split_key,
         modalities=MODALITIES,
         batch_size=args.batch_size,
-        transforms= None , #on_the_fly_transforms
+        transforms= normalizer_transform, #None 
         initial_transform=initial_transform
     )
     
@@ -461,7 +467,7 @@ def main(args):
             modalities=MODALITIES,
             split_dict=val_split_data,
             split_key=f"{split_key}_val",
-            transforms=None, #on_the_fly_transforms,
+            transforms=normalizer_transform ,#None,
             initial_transform=initial_transform
         )
         
@@ -510,7 +516,7 @@ def main(args):
             if val_metrics['roc_auc'] > best_val_auc:
                 best_val_auc = val_metrics['roc_auc']
                 best_epoch = epoch + 1
-                print(f"🎯 New best validation ROC AUC: {best_val_auc:.4f}")
+                print(f"New best validation ROC AUC: {best_val_auc:.4f}")
 
         if scheduler:
             scheduler.step()
@@ -668,4 +674,44 @@ if __name__ == "__main__":
         print("CUDA is not available and has been disabled.")
 
     main(args)
+   
+    """
+    testing for encoder trained without residualization: 
 
+    for site in Baltimore Boston Dallas Detroit Hartford mannheim creteil udine galway pittsburgh grenoble geneve; do
+        python3 20_fine_tuning_SBM_vertexwise.py \
+            --mode TL \
+            --site "$site" \
+            --checkpoint_dir /neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/models/SBM_TL/test_pretraining_within_img_normalization \
+            --traindata_size 8
+    done
+
+    testing for encoder trained without standardization: 
+
+    for site in Baltimore Boston Dallas Detroit Hartford mannheim creteil udine galway pittsburgh grenoble geneve; do
+        python3 20_fine_tuning_SBM_vertexwise.py \
+            --mode TL \
+            --site "$site" \
+            --checkpoint_dir /neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/models/SBM_TL/test_pretraining_without_normalization \
+            --traindata_size 8  \
+            --pretrained-encoder /neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/2022_cambroise_surfaugment/y_aware_no_standardization/ssl_scnns/checkpoints/1757686523/encoder.pth
+    done
+
+    testing for encoder trained without standardization and with residualization age + sex for Kfold (no site res): 
+
+    for i in (1 2 3 4 5 6 7 8 9); do
+        for j in (0 1 2 3 4 5 6 7 8); do
+            for site in Baltimore Boston Dallas Detroit Hartford mannheim creteil udine galway pittsburgh grenoble geneve; do
+                python3 20_fine_tuning_SBM_vertexwise.py \
+                    --mode TL \
+                    --site "$site" \
+                    --checkpoint_dir /neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/models/SBM_TL/test_pretraining_with_age_and_sex_res_standardization_with_pretraining_scaler/run$i \
+                    --traindata_size $j  \
+                    --pretrained-encoder /neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/2022_cambroise_surfaugment/y_aware_standardization_res_age_sex_only/ssl_scnns/checkpoints/1757804893/encoder.pth
+            done
+        done
+    done
+
+
+
+    """

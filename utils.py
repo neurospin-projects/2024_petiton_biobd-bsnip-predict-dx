@@ -8,7 +8,7 @@ from xgboost import XGBClassifier
 import pandas as pd
 import nibabel
 from torchvision.transforms.transforms import Compose
-from transforms import Crop, Padding, Normalize
+from deep_learning_vbm.transforms import Crop, Padding, Normalize
 from scipy.cluster.hierarchy import dendrogram
 import matplotlib.pyplot as plt
 from scipy.cluster.hierarchy import fcluster
@@ -29,7 +29,7 @@ def get_LOSO_CV_splits_N861():
 def get_classifier(classif):
     
     if classif =="svm" :
-        classifier= GridSearchCV(estimator = svm.SVC(class_weight='balanced'), param_grid={'kernel': ['rbf'], 'gamma' : ["scale"],'C': [ 0.1,  1. , 10. ]},\
+        classifier= GridSearchCV(estimator = svm.SVC(class_weight='balanced',probability=True), param_grid={'kernel': ['rbf'], 'gamma' : ["scale"],'C': [ 0.1,  1. , 10. ]},\
                                 cv=5, n_jobs=1)
     if classif =="EN":
         classifier = GridSearchCV(estimator=lm.SGDClassifier(loss='log_loss', penalty='elasticnet',class_weight='balanced',random_state=42),
@@ -120,7 +120,6 @@ def get_participants():
 
 def get_predict_sites_list():
     return ["Baltimore", "Boston", "Dallas", "Detroit", "Hartford", "mannheim", "creteil", "udine", "galway", "pittsburgh", "grenoble", "geneve"]
- 
 
 def has_zeros_col(arr):
     # if there are columns with only values equal to zero in the array
@@ -133,6 +132,14 @@ def save_shap_file(shap_values, shapfile):
         save_pkl(shap_values, file_name)
         print(f"Saved: {file_name}")
         return  # Stop once we save a file
+    
+def remove_zeros(df, verbose=False):
+    columns_with_only_zeros = df.columns[(df == 0).all()]
+    if verbose : print("columns with zeros ",columns_with_only_zeros)
+    column_indices = [df.columns.get_loc(col) for col in columns_with_only_zeros]
+    assert set(columns_with_only_zeros) <= {'lInfLatVen_GM_Vol', 'lOC_GM_Vol', 'lInfLatVen_CSF_Vol', 'lOC_CSF_Vol'}
+    df = df.drop(columns=columns_with_only_zeros)
+    return df
 
 def compute_covariance(X, y):
     # Number of samples (n) and features (m)
@@ -155,20 +162,20 @@ def compute_covariance(X, y):
     covariance = (X_centered.T @ y_centered) / (n - 1)
     return covariance
 
-def get_reshaped_4D(array, brain_mask_path_):
+def get_reshaped_4D(array, brain_mask_path_, verbose=False):
     nifti_mask = nibabel.load(brain_mask_path_)
     nifti_data_mask = nifti_mask.get_fdata()
     image_shape = nifti_data_mask.shape
     # flatten mask
-    print("mask shape in 3D", np.shape(nifti_data_mask))
+    if verbose: print("mask shape in 3D", np.shape(nifti_data_mask))
     nifti_data_mask = nifti_data_mask.ravel()
     # all reshaped zscores for this path
     nb_subjects = array.shape[0]
-    print("nb_subjects  ",nb_subjects)
+    if verbose: print("nb_subjects  ",nb_subjects)
     # on copie nb_subjects fois le masque de sorte à avoir un array de taille (nb_subjects,taille_masque_avec_0_et_1)
     result_array_ = np.tile(nifti_data_mask, (nb_subjects, 1))
     # where each subject of result_array is equal to 1, we copy the contents of the baltimore subjects 
-    print("result_array_.shape[0]",result_array_.shape[0])
+    if verbose: print("result_array_.shape[0]",result_array_.shape[0])
     for subject in range(0,result_array_.shape[0]): # loop through subjects
         result_array_[subject,nifti_data_mask==1] = array[subject,:]
     reshaped_img = result_array_.reshape((nb_subjects,*image_shape))

@@ -84,6 +84,7 @@ def create_df_VBM_roi():
         assert np.isclose(new_dfVBM["TIV"], 1500.0).all()
         assert new_dfVBM["participant_id"].is_unique, "all participant_ids aren't unique in the df"
 
+        new_dfVBM["sex"] = new_dfVBM["sex"].replace({1: "female", 0: "male"})
         print(new_dfVBM) # print new dataframe
 
         new_dfVBM.to_csv(ROI_VBM_FILE, index=False)
@@ -174,6 +175,7 @@ def create_df_SBM_roi(atlas="Destrieux", scale_TIV=False):
         if scale_TIV: assert np.isclose(SBMdf["TIV"], 1500.0).all()
         assert SBMdf["participant_id"].is_unique, "all participant_ids aren't unique in the df"
 
+        SBMdf["sex"] = SBMdf["sex"].replace({1: "female", 0: "male"})
         print(SBMdf) # print new dataframe
 
         SBMdf.to_csv(filepath, index=False)

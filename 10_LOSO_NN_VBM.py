@@ -218,7 +218,7 @@ def train(model, optimizer, loss_fn, loader, epoch=None, device=None, verbose=Tr
     if device is not None: model.to(device)
     model.train()
 
-    pbar = tqdm(total=len(loader), desc=f"Mini-batch epoch {epoch} training", leave=False)
+    pbar = tqdm(total=len(loader), desc=f"Mini-bacth epoch {epoch} training", leave=False)
     # leave=False to clear the progress bar once it reaches 100% to keep only final output (keeps logs clean)
 
     losses, y_pred, y_true, indices_all = [], [], [], []
@@ -546,31 +546,12 @@ def main():
     # examples of runs : 
     # for dataset N763, with transfer learning and transforms, at maximum training set size (datasize_idx 8), results will be saved in N763_classif_VBM_TL_run1 folder,
     # and the model will run only for LOSO CV test site grenoble:
-    # python3 10_fine_tuning_VBM_voxelwise.py --transforms --transfer --N763 --datasize_idx 8 --checkpoint_dir /neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/N763_classif_VBM_TL_run1 --whichsite grenoble
+    # python3 10_LOSO_NN_VBM.py --transforms --transfer --N763 --datasize_idx 8 --checkpoint_dir /neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/N763_classif_VBM_TL_run1 --whichsite grenoble
 
     # same thing + to run for all test sites at datasize_idx 1: 
-    # python3 10_fine_tuning_VBM_voxelwise.py --transforms --transfer --N763 --datasize_idx 1 --checkpoint_dir /neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/N763_classif_VBM_TL_run1 
+    # python3 10_LOSO_NN_VBM.py --transforms --transfer --N763 --datasize_idx 1 --checkpoint_dir /neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/N763_classif_VBM_TL_run1 
    
-    # python3 10_fine_tuning_VBM_voxelwise.py --transforms --transfer --N763 --datasize_idx 0 --checkpoint_dir /neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/N763_classif_VBM_TL_run2
-    
-    # =================== to run 5 TL models * 12 LOSO CV test sites at all train set sizes ==================
 
-
-    # =================== to test pretrained model ==================
-    # for site in "${sites[@]}"; do
-    #     for i in {0..8}; do
-    #         DIR="/neurospin/signatures/2024_petiton_biobd-bsnip-predict-dx/N763_classif_VBM_TL_run5"
-    #         DIRMODEL="$DIR/n_$i/densenet121_vbm_bipolar_epoch_199_${site}.pth"
-
-    #         python3 10_fine_tuning_VBM_voxelwise.py \
-    #             --transforms --N763 --datasize_idx $i \
-    #             --checkpoint_dir "$DIR" \
-    #             --model_to_test_path "$DIRMODEL" \
-    #             --whichsite "$site"
-    #     done
-    # done
-
-    
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--transforms", action="store_true", default=True)
@@ -587,7 +568,7 @@ def main():
                                  "mannheim", "creteil", "udine", "galway", "pittsburgh",
                                  "grenoble", "geneve"],
                         help="Run LOSO for a single testing site")
-    parser.add_argument("--datasize_idx", type=int, default=8, choices=list(range(9)))
+    parser.add_argument("--datasize_idx", type=int, default=8, choices=[1,2,3,4,5,6,7,8])
     parser.add_argument("--N763", action="store_true", default=False)
 
     args = parser.parse_args()

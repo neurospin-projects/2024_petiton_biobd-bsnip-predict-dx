@@ -14,7 +14,7 @@ Our work thus explores how different feature representations of structural neuro
 In this work, we chose a Leave-One-Site-Out (LOSO) cross-validation scheme, to optimally quantify site-effects.  
 This type of CV typically hinders performance, but generates more reproducible results, which we prioritized.  
 
-## Machine learning (ML) and Deep learning (DL) tests 
+## Machine learning (ML) and Deep learning (DL) models 
 
 ML tests include 5 models (2 linear, 3 non-linear): 
 - linear regression

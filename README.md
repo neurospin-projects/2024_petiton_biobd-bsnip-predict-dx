@@ -1,7 +1,7 @@
 # 2024_petiton_biobd-bsnip-predict-dx
 Prediction of diagnosis (Bipolar Disorder (BD) vs Healthy Controls (HC)) using Anatomical MRI.  
 Comparison of voxel-based morphometry (VBM) and surface-based morphometry (SBM) features for classification, at varying granularities (ROI vs. voxel- or vertex-wise).
-We find VBM and SBM features to be synergistic, with a combiner model outperforming all other classifiers, yielding a classification ROC-AUC of over 75%.··
+We find VBM and SBM features to be synergistic, with a combiner model outperforming all other classifiers, yielding a classification ROC-AUC of over 75%.<br>
 The paper for this code can be found as a preprint here: https://hal.science/hal-05571683/. <br>
 
 

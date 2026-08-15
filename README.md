@@ -32,7 +32,7 @@ DL tests include:
 Using deep ensembles was suggested in Dufumier et al. (2024) *Exploring the potential of representation and transfer learning for anatomical neuroimaging: Application to psychiatry*. [DOI:10.1016/j.neuroimage.2024.120665](https://10.1016/j.neuroimage.2024.120665), and consists in taking the mean predictions of five DL models.
 We chose ensembles of five models following a previous study in which we benchmarked the ideal number of models needed in a deep ensemble in similar applications: Petiton et al. (2024) *How and why does deep ensemble coupled with transfer learning increase performance in bipolar disorder and schizophrenia classification?* (https://hal.science/hal-04631924)).
 
-## meta-model 
+## Combiner model 
 We proprose a new combiner model in the form of a linear regression using stacked training and testing set scores for BD vs HC classification.
 We find a significant improvement in performance metrics with 3 features, each corresponding to the scores of the best-performing models for each feature type (an elastic net for SBM ROI, an SVM-RBF for VBM ROI, and 5-DE TL for voxelwise VBM gray matter measures).  
 This reinforces the claims made by Goto et al., and suggests that different brain measures (SBM and VBM) at different granularities (ROI and voxelwise) can not only improve classification results, but also encode complementary synergistic information differentiating the brain structure of healthy controls and bipolar disorder patients.
